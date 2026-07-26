@@ -27,28 +27,28 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 
 ### Project growth (heim metrics)
 
-![code 5,347](https://img.shields.io/badge/code-5%2C347%20LOC-informational) ![Δ 1d](https://img.shields.io/badge/%CE%94%201d-%2B5%2C347-red) ![Δ 3d](https://img.shields.io/badge/%CE%94%203d-%2B5%2C347-red) ![Δ 1w](https://img.shields.io/badge/%CE%94%201w-%2B5%2C347-red) ![Δ 2w](https://img.shields.io/badge/%CE%94%202w-%2B5%2C347-red) ![Δ 1mo](https://img.shields.io/badge/%CE%94%201mo-%2B5%2C347-red) ![Δ 2mo](https://img.shields.io/badge/%CE%94%202mo-%2B5%2C347-red) ![Δ 6mo](https://img.shields.io/badge/%CE%94%206mo-%2B5%2C347-red) ![Δ 1y](https://img.shields.io/badge/%CE%94%201y-%2B5%2C347-red)
+![code 5,451](https://img.shields.io/badge/code-5%2C451%20LOC-informational) ![Δ 1d](https://img.shields.io/badge/%CE%94%201d-%2B5%2C451-red) ![Δ 3d](https://img.shields.io/badge/%CE%94%203d-%2B5%2C451-red) ![Δ 1w](https://img.shields.io/badge/%CE%94%201w-%2B5%2C451-red) ![Δ 2w](https://img.shields.io/badge/%CE%94%202w-%2B5%2C451-red) ![Δ 1mo](https://img.shields.io/badge/%CE%94%201mo-%2B5%2C451-red) ![Δ 2mo](https://img.shields.io/badge/%CE%94%202mo-%2B5%2C451-red) ![Δ 6mo](https://img.shields.io/badge/%CE%94%206mo-%2B5%2C451-red) ![Δ 1y](https://img.shields.io/badge/%CE%94%201y-%2B5%2C451-red)
 
 | Now | |
 |-----|--|
-| **code** | 5,347 LOC |
-| **files** | 25 |
-| **size** | 509K |
-| **updated** | 2026-07-26T19:11:14Z UTC |
-| **history** | 2 samples in [`docs/metrics/`](docs/metrics/) |
+| **code** | 5,451 LOC |
+| **files** | 26 |
+| **size** | 511K |
+| **updated** | 2026-07-26T19:13:42Z UTC |
+| **history** | 3 samples in [`docs/metrics/`](docs/metrics/) |
 
 | Window | LOC Δ | Size Δ | Git +/− | Ready |
 |--------|------:|-------:|--------:|:-----:|
-| **1d** (today) | `+5,347` | `+509.2K` | `+9,374/−468` | since birth |
-| **3d** (3 days) | `+5,347` | `+509.2K` | `+9,374/−468` | since birth |
-| **1w** (1 week) | `+5,347` | `+509.2K` | `+9,374/−468` | since birth |
-| **2w** (2 weeks) | `+5,347` | `+509.2K` | `+9,374/−468` | since birth |
-| **1mo** (1 month) | `+5,347` | `+509.2K` | `+9,374/−468` | since birth |
-| **2mo** (2 months) | `+5,347` | `+509.2K` | `+9,374/−468` | since birth |
-| **6mo** (6 months) | `+5,347` | `+509.2K` | `+9,374/−468` | since birth |
-| **1y** (1 year) | `+5,347` | `+509.2K` | `+9,374/−468` | since birth |
+| **1d** (today) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
+| **3d** (3 days) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
+| **1w** (1 week) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
+| **2w** (2 weeks) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
+| **1mo** (1 month) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
+| **2mo** (2 months) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
+| **6mo** (6 months) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
+| **1y** (1 year) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
 
-LOC/size deltas need a committed sample older than the window (daily cron builds that history). Until then, badges may show **git** net churn (`insertions − deletions`) from `git log --shortstat`.
+LOC/size Δ use committed samples in [`docs/metrics/samples.jsonl`](docs/metrics/samples.jsonl). If the repo is younger than a window, Ready shows **since birth** (full history). Git +/− is always from live `git log --shortstat`.
 
 <sub>Auto-refreshed by [metrics.yml](.github/workflows/metrics.yml) (daily cron + manual). Re-run: <code>python3 scripts/metrics_readme.py</code></sub>
 
