@@ -5,7 +5,7 @@ This directory is the **committed sample store** that powers the README “Proje
 | File | Role |
 |------|------|
 | `samples.jsonl` | Append-only compact samples (`ts`, `code`, `files`, `size`, …) |
-| `latest.json` | Last run: current totals + per-window deltas (`heim.metrics.v1`) |
+| `latest.json` | Last run: current totals, **top-7 languages**, per-window deltas (`heim.metrics.v1`) |
 
 ## Windows
 
@@ -25,7 +25,8 @@ This directory is the **committed sample store** that powers the README “Proje
 - **since birth** — if the project is younger than the window, baseline is the origin seed (code `0` at the first commit).
 
 Daily cron keeps the sample history honest as real time passes.  
-**Git +/−** comes from `git log --shortstat` and is available immediately.
+**Git +/−** comes from `git log --shortstat` and is available immediately.  
+**Top 7 languages** are taken from the same `heim --once --json` sample as the TUI languages panel (`loc.languages`, ranked by code lines).
 
 ## How it updates
 

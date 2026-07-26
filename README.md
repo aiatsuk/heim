@@ -27,28 +27,44 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 
 ### Project growth (heim metrics)
 
-![code 5,451](https://img.shields.io/badge/code-5%2C451%20LOC-informational) ![Δ 1d](https://img.shields.io/badge/%CE%94%201d-%2B5%2C451-red) ![Δ 3d](https://img.shields.io/badge/%CE%94%203d-%2B5%2C451-red) ![Δ 1w](https://img.shields.io/badge/%CE%94%201w-%2B5%2C451-red) ![Δ 2w](https://img.shields.io/badge/%CE%94%202w-%2B5%2C451-red) ![Δ 1mo](https://img.shields.io/badge/%CE%94%201mo-%2B5%2C451-red) ![Δ 2mo](https://img.shields.io/badge/%CE%94%202mo-%2B5%2C451-red) ![Δ 6mo](https://img.shields.io/badge/%CE%94%206mo-%2B5%2C451-red) ![Δ 1y](https://img.shields.io/badge/%CE%94%201y-%2B5%2C451-red)
+![code 5,536](https://img.shields.io/badge/code-5%2C536%20LOC-informational) ![Δ 1d](https://img.shields.io/badge/%CE%94%201d-%2B5%2C536-red) ![Δ 3d](https://img.shields.io/badge/%CE%94%203d-%2B5%2C536-red) ![Δ 1w](https://img.shields.io/badge/%CE%94%201w-%2B5%2C536-red) ![Δ 2w](https://img.shields.io/badge/%CE%94%202w-%2B5%2C536-red) ![Δ 1mo](https://img.shields.io/badge/%CE%94%201mo-%2B5%2C536-red) ![Δ 2mo](https://img.shields.io/badge/%CE%94%202mo-%2B5%2C536-red) ![Δ 6mo](https://img.shields.io/badge/%CE%94%206mo-%2B5%2C536-red) ![Δ 1y](https://img.shields.io/badge/%CE%94%201y-%2B5%2C536-red)
 
 | Now | |
 |-----|--|
-| **code** | 5,451 LOC |
+| **code** | 5,536 LOC |
 | **files** | 26 |
-| **size** | 511K |
-| **updated** | 2026-07-26T19:13:42Z UTC |
-| **history** | 3 samples in [`docs/metrics/`](docs/metrics/) |
+| **size** | 515K |
+| **updated** | 2026-07-26T19:18:03Z UTC |
+| **history** | 4 samples in [`docs/metrics/`](docs/metrics/) |
+
+#### Top 7 languages
+
+![Rust 4,335](https://img.shields.io/badge/Rust-4%2C335-blueviolet) ![Python 850](https://img.shields.io/badge/Python-850-blue) ![JSON 112](https://img.shields.io/badge/JSON-112-informational) ![Markdown 94](https://img.shields.io/badge/Markdown-94-success) ![SVG 69](https://img.shields.io/badge/SVG-69-yellowgreen) ![TOML 40](https://img.shields.io/badge/TOML-40-orange) ![Shell 36](https://img.shields.io/badge/Shell-36-lightgrey)
+
+| # | Language | Code | % of LOC |
+|--:|----------|------:|--------:|
+| 1 | **Rust** | `4,335` | 78.3% |
+| 2 | **Python** | `850` | 15.3% |
+| 3 | **JSON** | `112` | 2.0% |
+| 4 | **Markdown** | `94` | 1.7% |
+| 5 | **SVG** | `69` | 1.2% |
+| 6 | **TOML** | `40` | 0.7% |
+| 7 | **Shell** | `36` | 0.7% |
+
+#### Time-window deltas
 
 | Window | LOC Δ | Size Δ | Git +/− | Ready |
 |--------|------:|-------:|--------:|:-----:|
-| **1d** (today) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
-| **3d** (3 days) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
-| **1w** (1 week) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
-| **2w** (2 weeks) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
-| **1mo** (1 month) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
-| **2mo** (2 months) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
-| **6mo** (6 months) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
-| **1y** (1 year) | `+5,451` | `+512.0K` | `+10,211/−482` | since birth |
+| **1d** (today) | `+5,536` | `+515.2K` | `+10,267/−537` | since birth |
+| **3d** (3 days) | `+5,536` | `+515.2K` | `+10,267/−537` | since birth |
+| **1w** (1 week) | `+5,536` | `+515.2K` | `+10,267/−537` | since birth |
+| **2w** (2 weeks) | `+5,536` | `+515.2K` | `+10,267/−537` | since birth |
+| **1mo** (1 month) | `+5,536` | `+515.2K` | `+10,267/−537` | since birth |
+| **2mo** (2 months) | `+5,536` | `+515.2K` | `+10,267/−537` | since birth |
+| **6mo** (6 months) | `+5,536` | `+515.2K` | `+10,267/−537` | since birth |
+| **1y** (1 year) | `+5,536` | `+515.2K` | `+10,267/−537` | since birth |
 
-LOC/size Δ use committed samples in [`docs/metrics/samples.jsonl`](docs/metrics/samples.jsonl). If the repo is younger than a window, Ready shows **since birth** (full history). Git +/− is always from live `git log --shortstat`.
+LOC/size Δ use committed samples in [`docs/metrics/samples.jsonl`](docs/metrics/samples.jsonl). If the repo is younger than a window, Ready shows **since birth** (full history). Git +/− is always from live `git log --shortstat`. Languages are the top 7 from the same sample as the TUI **languages** panel.
 
 <sub>Auto-refreshed by [metrics.yml](.github/workflows/metrics.yml) (daily cron + manual). Re-run: <code>python3 scripts/metrics_readme.py</code></sub>
 

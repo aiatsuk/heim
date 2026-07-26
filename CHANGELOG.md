@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **README growth metrics** (1d / 3d / 1w / 2w / 1mo / 2mo / 6mo / 1y): CI cron samples via `scripts/metrics_readme.py`, stores history in `docs/metrics/`, rewrites shields-style badges + table between `HEIM:METRICS` markers
+- README **top-7 languages** (code + % of LOC) from the same sample as the TUI languages panel
 - Workflow `.github/workflows/metrics.yml` (daily schedule + manual + path-filtered push)
 
 ## [0.1.0] — 2026-07-26
