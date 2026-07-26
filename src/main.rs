@@ -221,7 +221,8 @@ fn run() -> Result<()> {
     worker.request_full();
 
     // 120Hz frame budget for smooth animation pacing.
-    let frame = Duration::from_nanos(1_000_000_000 / theme::TARGET_FPS);
+    let fps: u64 = std::env::var("HEIM_FPS").ok().and_then(|v| v.parse().ok()).unwrap_or(theme::TARGET_FPS);
+    let frame = Duration::from_nanos(1_000_000_000 / fps);
     let res = event_loop(&mut term, &mut app, &worker, &sample_rx, frame);
 
     if let Some(st) = app.store.as_mut() {
@@ -302,6 +303,7 @@ fn event_loop(
 ) -> Result<()> {
     let mut lang_vis = 8usize;
     let mut git_vis = 5usize;
+    let mut cached_size = term.size()?;
     loop {
         let frame_start = Instant::now();
 
@@ -333,7 +335,13 @@ fn event_loop(
         // saves terminal *bytes*, not CPU — `swap_buffers` resets the incoming
         // buffer, so every `draw` re-renders all 1000+ lines of widget layout.
         app.bump_tick();
-        let size = term.size()?;
+        if std::env::var_os("HEIM_SIZEBENCH").is_some() {
+            let t0 = Instant::now();
+            for _ in 0..2000 { let _ = term.size()?; }
+            eprintln!("term.size(): {:?}/call", t0.elapsed()/2000);
+            std::process::exit(0);
+        }
+        let size = if std::env::var_os("HEIM_SIZEONCE").is_some() { cached_size } else { let s = term.size()?; cached_size = s; s };
         app.clamp_layout(size.height);
         let vis = match app.focus {
             Focus::Git => git_vis,
@@ -342,7 +350,7 @@ fn event_loop(
         app.ensure_sel_visible(vis);
 
         let anim = theme::anim_frame(app.tick);
-        if app.dirty || anim != app.last_anim {
+        if std::env::var_os("HEIM_NODRAW").is_none() && (app.dirty || anim != app.last_anim) {
             app.last_anim = anim;
             app.dirty = false;
             term.draw(|f| {

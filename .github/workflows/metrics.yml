@@ -1,0 +1,75 @@
+name: Metrics
+
+# Long-window growth stats for the README (1d … 1y).
+# - schedule: daily sample + README refresh
+# - workflow_dispatch: manual re-run
+# - push to main on product code: catch large swings without waiting for cron
+#
+# Commits use [skip ci] so the metrics commit does not re-trigger CI/metrics loops.
+
+on:
+  schedule:
+    # 06:17 UTC daily — odd minute avoids top-of-hour queue contention
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "scripts/metrics_readme.py"
+      - ".github/workflows/metrics.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: metrics-readme
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  update:
+    name: sample + README
+    runs-on: ubuntu-latest
+    # Don't fail the whole repo if shields/git glitches; metrics are best-effort.
+    continue-on-error: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so git shortstat windows (1y) are meaningful.
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build heim
+        run: cargo build --release --locked
+
+      - name: Refresh metrics + README
+        env:
+          HEIM_BIN: ${{ github.workspace }}/target/release/heim
+        run: python3 scripts/metrics_readme.py
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add README.md docs/metrics/samples.jsonl docs/metrics/latest.json
+          if git diff --staged --quiet; then
+            echo "No metrics changes."
+            exit 0
+          fi
+
+          git commit -m "chore(metrics): refresh README growth stats [skip ci]"
+          # Rebase if another push landed; avoid force-push on main.
+          git pull --rebase origin main || true
+          git push origin HEAD:main
