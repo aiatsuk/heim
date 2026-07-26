@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+.DS_Store
+.heim/
+meetings/
+docs/private/
+*.swp
+*.swo
+.idea/
+.vscode/
