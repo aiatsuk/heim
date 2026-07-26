@@ -219,7 +219,9 @@ pub fn collect(path: &Path, size_pref: SizeBackendKind) -> Sample {
 /// OS pipe buffer (~64KiB) — which is exactly what `git log --numstat` does.
 fn run_timed(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let tspawn = Instant::now();
     let mut child = cmd.spawn().context("spawn")?;
+    let spawn_took = tspawn.elapsed();
 
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
@@ -267,8 +269,16 @@ fn run_timed(mut cmd: Command, timeout: Duration) -> Result<std::process::Output
         }
     };
 
+    let waited = start.elapsed();
     let stdout = stdout_h.join().unwrap_or_default();
     let stderr = stderr_h.join().unwrap_or_default();
+    if std::env::var_os("HEIM_TRACE").is_some() {
+        eprintln!(
+            "heim[trace]   cmd {:?}: spawn={spawn_took:.2?} wait={waited:.2?} drain={:.2?}",
+            cmd.get_args().take(4).collect::<Vec<_>>(),
+            start.elapsed() - waited
+        );
+    }
     Ok(std::process::Output {
         status,
         stdout,
@@ -703,10 +713,12 @@ fn run_git(path: &Path) -> Result<Option<GitStats>> {
     let (p_staged, p_log) = (path.to_path_buf(), path.to_path_buf());
 
     let h_branch = thread::spawn(move || {
-        timed("branch", || git_out(&p_branch, &["rev-parse", "--abbrev-ref", "HEAD"]))
-            .unwrap_or_else(|_| "HEAD".into())
-            .trim()
-            .to_string()
+        timed("branch", || {
+            git_out(&p_branch, &["rev-parse", "--abbrev-ref", "HEAD"])
+        })
+        .unwrap_or_else(|_| "HEAD".into())
+        .trim()
+        .to_string()
     });
     // Working-tree stats: numstat is fine (usually << pipe buffer). On huge
     // dirty trees, shortstat is a fallback if numstat fails/times out.

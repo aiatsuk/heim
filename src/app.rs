@@ -565,8 +565,17 @@ impl App {
         }
         self.refreshing = false;
         // Keep a machine-readable snapshot for agents (`heim --once --json` / `.heim/stats.json`).
+        let __t = std::time::Instant::now();
         let report = crate::report::Report::from_app(self);
+        let __t2 = std::time::Instant::now();
         let _ = crate::report::write_store_stats(&self.path, &report);
+        if std::env::var_os("HEIM_TRACE").is_some() {
+            eprintln!(
+                "heim[trace] apply_sample: from_app={:.2?} write_stats={:.2?}",
+                __t2 - __t,
+                __t2.elapsed()
+            );
+        }
     }
 
     pub fn due(&self) -> bool {
