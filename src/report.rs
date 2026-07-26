@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::app::{App, CODE_DELTA_WINDOWS};
-use crate::collect::{Sample, SizeBackendKind};
+use crate::collect::{self, Sample, SizeBackendKind};
 use crate::fmt;
 use crate::store::{self, Store};
 
@@ -100,10 +100,14 @@ pub struct CommitReport {
 pub struct WindowDeltaReport {
     pub window: String,
     pub window_secs: u64,
-    /// `true` when enough history exists to evaluate this window.
+    /// `true` when enough heim sample history exists for `code` / `size_bytes`.
     pub ready: bool,
     pub code: Option<i64>,
     pub size_bytes: Option<i64>,
+    /// Git commit insertions in this wall-clock window (sum of shortstats).
+    pub insertions: u64,
+    /// Git commit deletions in this wall-clock window (sum of shortstats).
+    pub deletions: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -181,6 +185,12 @@ impl Report {
                 .collect(),
         });
 
+        // One git log for the longest report window; bucket into each delta.
+        let max_window_secs = report_windows().map(|(s, _)| s).max().unwrap_or(0);
+        let churn =
+            collect::git_commit_churn_since(&app.path, Duration::from_secs(max_window_secs));
+        let now_unix = system_to_unix(SystemTime::now());
+
         let deltas: Vec<WindowDeltaReport> = report_windows()
             .map(|(secs, label)| {
                 let window = Duration::from_secs(secs);
@@ -190,12 +200,15 @@ impl Report {
                 } else {
                     (None, None)
                 };
+                let (insertions, deletions) = collect::sum_churn_in_window(&churn, secs, now_unix);
                 WindowDeltaReport {
                     window: label.to_string(),
                     window_secs: secs,
                     ready,
                     code,
                     size_bytes,
+                    insertions,
+                    deletions,
                 }
             })
             .collect();
@@ -205,7 +218,8 @@ impl Report {
 
         let mut hints = Vec::new();
         hints.push(
-            "Compare deltas[].code for window \"2h\" to see how many lines were added recently."
+            "Compare deltas[].code and deltas[].insertions/deletions for window \"2h\" \
+             (cloc net LOC vs git commit churn)."
                 .into(),
         );
         hints.push(

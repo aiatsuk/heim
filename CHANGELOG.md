@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mouse, panel focus, weight drill-down, contribution heatmap
 - **AI / agent JSON stats**: `heim --once --json` and `-o/--output`
 - Auto-updated `<project>/.heim/stats.json` on every sample (schema `heim.stats.v1`)
-- Window deltas in JSON for 5m–2h plus 4h / 8h / 1d (code + size)
+- Window deltas in JSON for 5m–2h plus 4h / 8h / 1d (code + size + git insertions/deletions)
 
 ### Notes
 

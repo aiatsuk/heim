@@ -160,7 +160,7 @@ Includes:
 | `loc` | code / files / blank / comment + per-language breakdown |
 | `size` | bytes, human size, engine, top directories |
 | `git` | branch, dirty +/- , recent commits |
-| `deltas[]` | per window: `ready`, `code`, `size_bytes` (5m…1d) |
+| `deltas[]` | per window: `ready`, `code`, `size_bytes`, git `insertions` / `deletions` (5m…1d) |
 | `session` | deltas since this process baseline |
 | `history` | sample count, span, store path |
 | `hints` | short guidance for agents / humans |

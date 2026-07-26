@@ -648,6 +648,96 @@ fn parse_shortstat(text: &str) -> (u64, u64) {
     (ins, del)
 }
 
+/// One commit's wall time + shortstat churn (for windowed deltas in JSON reports).
+#[derive(Debug, Clone, Copy)]
+pub struct CommitChurn {
+    pub unix_ts: u64,
+    pub insertions: u64,
+    pub deletions: u64,
+}
+
+/// Commits since `max_age` ago with insertions/deletions (newest first).
+/// Used to fill `deltas[].insertions` / `deltas[].deletions` with one git call.
+pub fn git_commit_churn_since(path: &Path, max_age: Duration) -> Vec<CommitChurn> {
+    if !git_ok(path) {
+        return Vec::new();
+    }
+    let since = format!("--since={} seconds ago", max_age.as_secs().max(1));
+    // RS + unix timestamp, then optional shortstat line(s).
+    let pretty = "--pretty=format:%x1e%ct";
+    let raw = match git_out(path, &["log", &since, pretty, "--shortstat"]) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    parse_commit_churn_stream(&raw)
+}
+
+/// Parse `git log --pretty=format:%x1e%ct --shortstat` output into per-commit churn.
+pub fn parse_commit_churn_stream(raw: &str) -> Vec<CommitChurn> {
+    let mut out = Vec::new();
+    let mut cur_ts: Option<u64> = None;
+    let mut cur_ins = 0u64;
+    let mut cur_del = 0u64;
+
+    let flush = |out: &mut Vec<CommitChurn>, ts: &mut Option<u64>, ins: &mut u64, del: &mut u64| {
+        if let Some(t) = ts.take() {
+            out.push(CommitChurn {
+                unix_ts: t,
+                insertions: *ins,
+                deletions: *del,
+            });
+        }
+        *ins = 0;
+        *del = 0;
+    };
+
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix('\u{1e}') {
+            flush(&mut out, &mut cur_ts, &mut cur_ins, &mut cur_del);
+            let rest = rest.trim();
+            // Usually just a timestamp; sometimes shortstat shares the line.
+            let mut parts = rest.splitn(2, char::is_whitespace);
+            cur_ts = parts.next().and_then(|t| t.parse().ok());
+            if let Some(tail) = parts.next() {
+                let tail = tail.trim();
+                if tail.contains("insertion")
+                    || tail.contains("deletion")
+                    || tail.contains("changed")
+                {
+                    let (ins, del) = parse_shortstat(tail);
+                    cur_ins = ins;
+                    cur_del = del;
+                }
+            }
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.contains("insertion") || line.contains("deletion") || line.contains("changed") {
+            let (ins, del) = parse_shortstat(line);
+            cur_ins = ins;
+            cur_del = del;
+        }
+    }
+    flush(&mut out, &mut cur_ts, &mut cur_ins, &mut cur_del);
+    out
+}
+
+/// Sum commit insertions/deletions with `unix_ts >= now - window_secs`.
+pub fn sum_churn_in_window(churn: &[CommitChurn], window_secs: u64, now_unix: u64) -> (u64, u64) {
+    let cutoff = now_unix.saturating_sub(window_secs);
+    let mut ins = 0u64;
+    let mut del = 0u64;
+    for c in churn {
+        if c.unix_ts >= cutoff {
+            ins = ins.saturating_add(c.insertions);
+            del = del.saturating_add(c.deletions);
+        }
+    }
+    (ins, del)
+}
+
 /// Last N commits: hash / subject / author + shortstat (+/−).
 /// Avoids per-file `--numstat` (hundreds of KB → pipe deadlock + slow).
 fn recent_commits(path: &Path, n: usize) -> Vec<GitCommit> {
@@ -803,5 +893,27 @@ mod tests {
         assert_eq!(out[0].ins, 10);
         assert_eq!(out[0].del, 3);
         assert_eq!(out[1].del, 1);
+    }
+
+    #[test]
+    fn parse_commit_churn_and_window_sum() {
+        let t = "\u{1e}1000\n 2 files changed, 10 insertions(+), 3 deletions(-)\n\
+\u{1e}2000\n 1 file changed, 7 insertions(+)\n\
+\u{1e}3000\n 1 file changed, 2 deletions(-)\n";
+        let churn = parse_commit_churn_stream(t);
+        assert_eq!(churn.len(), 3);
+        assert_eq!(churn[0].unix_ts, 1000);
+        assert_eq!(churn[0].insertions, 10);
+        assert_eq!(churn[0].deletions, 3);
+        assert_eq!(churn[1].insertions, 7);
+        assert_eq!(churn[2].deletions, 2);
+        // window ending at 3000 of length 1000 → ts >= 2000
+        let (ins, del) = sum_churn_in_window(&churn, 1000, 3000);
+        assert_eq!(ins, 7);
+        assert_eq!(del, 2);
+        // full span
+        let (ins, del) = sum_churn_in_window(&churn, 3000, 3000);
+        assert_eq!(ins, 17);
+        assert_eq!(del, 5);
     }
 }
