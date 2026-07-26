@@ -1,18 +1,10 @@
 # heim
 
-**Real-time project monitor built for AI coding sessions** — watch how much code a model generates, how heavy the tree gets, and what git is doing, then feed the same metrics back to the agent as JSON.
-
-Run the TUI while an agent works. When you want the agent to *self-check* (“how many lines did you add in the last two hours?”), call:
-
-```bash
-heim --once --json .
-```
-
-…or let it read `<project>/.heim/stats.json`, which is refreshed on every sample.
+**Real-time project monitor for AI coding sessions** — LOC, disk weight, git, and time-window deltas in a compact TUI, plus JSON stats agents can read.
 
 ```text
 ┌ monitor ──────────────────────────────────────────────────────────────────┐
-│ heim  ~/code/my-app  every 60s · just now  ○ live                         │
+│ my-app  ~/code/my-app  every 60s · just now  ○ live                       │
 │ code 12,480  files 86  blank 1,204  comments 890  size 4.2M               │
 │ ◆ Δ 5m +120  10m +340  30m +910  1h +2.1k  2h +4.8k  · top Rust 71%       │
 ├ languages ───────────────┬ weight ────────────────────────────────────────┤
@@ -29,24 +21,49 @@ heim --once --json .
 
 ---
 
-## Why heim? (AI workflow)
+## Motivation
 
-Large language models can dump a lot of code quickly. heim is a **control surface** for that loop:
+### The problem: AI writes a lot of code, fast
 
-| Goal | How heim helps |
-|------|----------------|
-| See generation in real time | TUI live-updates LOC, size, git while the agent works |
-| Catch “too much code” early | Δ windows (5m → 1d) show how many lines landed recently |
-| Let the agent inspect itself | `heim --once --json` / `.heim/stats.json` with full detail |
-| Clean up with evidence | Agent can compare `deltas[2h].code`, language mix, top dirs, git log |
-| Stay local | No network, no accounts — only your project tree |
+Coding agents and LLMs changed the bottleneck. You no longer wait on typing speed — you wait on **judgment**:
 
-Typical loop:
+- A single session can add **thousands of lines** in minutes (scaffolds, “just in case” modules, duplicated helpers, verbose comments, dead experiments).
+- The tree **grows quietly**: new folders, fat assets, generated junk next to real product code.
+- Git history fills with large commits that are hard to review after the fact.
+- Classic tools (`cloc`, `du`, `git log`) answer one-off questions. They do **not** sit beside the agent and show *how much landed in the last 5 minutes / 2 hours*.
+- Without a live control surface, “vibe-coded” repos tend toward **bloat**: hard to navigate, expensive to review, and full of code nobody asked to keep.
 
-1. You start `heim` (or keep sampling with `--once`).
-2. The agent edits the repo.
-3. You ask: *“Check how many lines you added in 2h and trim noise.”*
-4. The agent runs `heim --once --json .`, reads `deltas`, and fixes the tree.
+The failure mode is not “AI can’t code.” It’s **unbounded volume without feedback**.
+
+### The solution: heim
+
+**heim** is a small local dashboard purpose-built for that loop.
+
+| You need | heim gives you |
+|----------|----------------|
+| See generation as it happens | Live TUI: languages, size, git, refresh on a timer |
+| Notice “too much code” early | Δ windows (5m → 1d): *how many lines appeared recently* |
+| Tell the agent to clean up **with numbers** | `heim --once --json` and `.heim/stats.json` — same metrics, machine-readable |
+| Know *where* weight and LOC went | Ranked languages + disk weight with drill-down |
+| Stay in control of the session | You watch; the agent can re-query stats and trim |
+
+In short: **heim turns “the model wrote a lot” from a gut feeling into measurable, actionable stats** — for humans in the terminal and for agents that can shell out and self-audit.
+
+### Typical loop
+
+1. Start `heim` in the project (or sample with `--once` while you work).
+2. Let the agent implement features.
+3. Glance at Δ (or ask the agent): *“How many lines in the last 2 hours? Too much — remove noise.”*
+4. Agent runs `heim --once --json .`, reads `deltas` / top paths / git, cleans up, re-checks.
+
+```bash
+# human: live control surface
+heim -i 10
+
+# agent: self-check
+heim --once --json .
+# or: cat .heim/stats.json
+```
 
 ---
 
