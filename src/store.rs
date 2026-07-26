@@ -80,6 +80,10 @@ impl Store {
         })
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn begin_session(&mut self, project: &Path, interval_secs: u64) -> Result<()> {
         let ev = SessionEvent::Start {
             id: self.session_id.clone(),
@@ -235,7 +239,8 @@ fn ensure_privacy_files(root: &Path) -> Result<()> {
             &readme,
             "heim private local store\n\n\
              sessions.jsonl — session start/end events\n\
-             samples.jsonl  — metric samples for cross-session history\n\n\
+             samples.jsonl  — metric samples for cross-session history\n\
+             stats.json     — latest full report (for AI agents / scripts)\n\n\
              This directory is local-only. Do not commit it.\n",
         )?;
     }

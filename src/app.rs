@@ -550,6 +550,9 @@ impl App {
             self.history.pop_front();
         }
         self.refreshing = false;
+        // Keep a machine-readable snapshot for agents (`heim --once --json` / `.heim/stats.json`).
+        let report = crate::report::Report::from_app(self);
+        let _ = crate::report::write_store_stats(&self.path, &report);
     }
 
     pub fn due(&self) -> bool {
@@ -621,6 +624,21 @@ impl App {
 
     /// Code-line delta vs oldest sample still within `window` (wall clock, cross-session).
     pub fn window_code_delta(&self, window: Duration) -> Option<i64> {
+        let (cur, old) = self.window_pair(window)?;
+        match (&cur.loc, &old.loc) {
+            (Some(c), Some(o)) => Some(c.code as i64 - o.code as i64),
+            _ => None,
+        }
+    }
+
+    /// Disk size delta vs oldest sample still within `window`.
+    pub fn window_size_delta(&self, window: Duration) -> Option<i64> {
+        let (cur, old) = self.window_pair(window)?;
+        Some(cur.size_bytes as i64 - old.size_bytes as i64)
+    }
+
+    /// Current sample + oldest sample still inside the wall-clock window.
+    fn window_pair(&self, window: Duration) -> Option<(&Sample, &Sample)> {
         let cur = self.last.as_ref()?;
         if !self.window_ready(window) {
             return None;
@@ -630,10 +648,7 @@ impl App {
             .history
             .iter()
             .find(|s| now.duration_since(s.wall).unwrap_or(Duration::MAX) <= window)?;
-        match (&cur.loc, &old.loc) {
-            (Some(c), Some(o)) => Some(c.code as i64 - o.code as i64),
-            _ => None,
-        }
+        Some((cur, old))
     }
 
     pub fn langs(&self) -> &[LangStat] {

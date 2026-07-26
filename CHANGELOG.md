@@ -15,8 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Size backends: `auto` (prefer `dust`), `dust`, `walk`
 - Headless `--once` mode for scripts and CI
 - Mouse, panel focus, weight drill-down, contribution heatmap
+- **AI / agent JSON stats**: `heim --once --json` and `-o/--output`
+- Auto-updated `<project>/.heim/stats.json` on every sample (schema `heim.stats.v1`)
+- Window deltas in JSON for 5m–2h plus 4h / 8h / 1d (code + size)
 
 ### Notes
 
-- First public-oriented release
+- Positioned for AI coding sessions: watch generation, then let agents self-audit
 - External tools: `cloc` required; `git` and `dust` recommended

@@ -1,8 +1,9 @@
-//! heim — minimal real-time project LOC / size / git TUI.
+//! heim — real-time project LOC / size / git TUI + JSON stats for AI agents.
 
 mod app;
 mod collect;
 mod fmt;
+mod report;
 mod store;
 mod theme;
 mod ui;
@@ -33,21 +34,37 @@ use collect::{DirSize, Sample, SizeBackendKind};
 #[derive(Parser, Debug)]
 #[command(
     name = "heim",
-    about = "Real-time project monitor: cloc languages, disk weight, git — compact TUI",
+    about = "Real-time project monitor for AI coding sessions: LOC, disk weight, git — TUI + JSON",
+    long_about = "Watch how much code an AI (or you) adds to a project in real time.\n\
+                  \n\
+                  TUI mode tracks languages, disk weight, and git. Machine mode \
+                  (`--once --json`) prints a detailed stats report agents can read, \
+                  and always refreshes `<project>/.heim/stats.json`.",
     version
 )]
 struct Cli {
     #[arg(value_name = "PATH")]
     path: Option<PathBuf>,
 
+    /// Refresh interval in seconds (TUI mode).
     #[arg(short, long, default_value_t = 60)]
     interval: u64,
 
     #[arg(long, default_value = "auto", value_parser = parse_size_backend)]
     size_backend: SizeBackendKind,
 
+    /// Take one sample and exit (no TUI).
     #[arg(long)]
     once: bool,
+
+    /// Emit machine-readable JSON (implies one-shot sample; no TUI).
+    /// Also writes `<project>/.heim/stats.json` for agents.
+    #[arg(long)]
+    json: bool,
+
+    /// Write JSON report to FILE (implies --json). Use `-` for stdout only.
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    output: Option<PathBuf>,
 }
 
 fn parse_size_backend(s: &str) -> std::result::Result<SizeBackendKind, String> {
@@ -131,15 +148,40 @@ fn run() -> Result<()> {
         bail!("{} is not a directory", path.display());
     }
 
-    if cli.once {
-        let s = collect::collect(&path, cli.size_backend);
-        if let Ok(mut st) = store::Store::open(&path) {
-            let _ = st.begin_session(&path, cli.interval);
-            let _ = st.record_sample(&s);
-            st.end_session();
-            std::mem::forget(st);
+    let want_json = cli.json || cli.output.is_some();
+    if want_json || cli.once {
+        if want_json {
+            let report = report::collect_report(&path, cli.size_backend)?;
+            let text = report.to_json_pretty()?;
+            match cli.output.as_deref() {
+                Some(p) if p.as_os_str() != "-" => {
+                    report.write_to(p)?;
+                    println!("{text}");
+                    eprintln!("heim: wrote {}", p.display());
+                    eprintln!(
+                        "heim: also updated {}",
+                        report::store_stats_path(&path).display()
+                    );
+                }
+                _ => {
+                    println!("{text}");
+                    eprintln!(
+                        "heim: updated {}",
+                        report::store_stats_path(&path).display()
+                    );
+                }
+            }
+        } else {
+            // Text one-shot: still refresh `.heim/stats.json` for agents.
+            let mut app = App::new(path.clone(), cli.interval, cli.size_backend);
+            let s = collect::collect(&path, cli.size_backend);
+            app.apply_sample(s.clone());
+            print_once(&path, &s);
+            if let Some(mut st) = app.store.take() {
+                st.end_session();
+                std::mem::forget(st);
+            }
         }
-        print_once(&path, &s);
         return Ok(());
     }
 
