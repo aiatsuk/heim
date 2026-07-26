@@ -5,10 +5,14 @@ Thanks for helping. Keep changes small and focused.
 ## Setup
 
 ```bash
-brew install cloc dust   # or equivalent on your OS
+# Optional: dust for --size-backend dust
+# brew install dust   # or: cargo install du-dust
+
 cargo test
-cargo run --release -- --once .
+cargo run --release -- --once --json .
 ```
+
+No external LOC tool is required (tokei is linked in-process).
 
 ## Workflow
 
@@ -22,12 +26,12 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --release
-./target/release/heim --once .
+./target/release/heim --once --json .
 ```
 
 ## Style
 
-- Match existing module layout (`app`, `collect`, `fmt`, `store`, `theme`, `ui`)
+- Match existing module layout (`app`, `collect`, `fmt`, `report`, `store`, `theme`, `ui`)
 - Keep the UI thread non-blocking; heavy work stays in the collector worker
 - Prefer pure helpers in `fmt` / `collect` with unit tests
 - No secrets, personal paths, or private process notes in the tree
@@ -37,8 +41,16 @@ cargo build --release
 Good first contributions:
 
 - Linux / Windows smoke notes
-- README screenshot or short GIF
+- Live demo GIF (`docs/demo.tape` + VHS, or asciinema)
 - Clippy cleanups, dead-code removal, docs
 - Better ignores or size-backend edge cases
+- Agent skill improvements (`skills/heim-audit`)
 
 Please avoid drive-by dependency upgrades unless they fix a bug.
+
+## Releases
+
+1. Bump version in `Cargo.toml` + `CHANGELOG.md`
+2. Tag `vX.Y.Z` and push — [Release workflow](.github/workflows/release.yml) builds multi-target archives
+3. `cargo publish` for `heim-monitor` (binary remains `heim`)
+4. Optionally refresh `dist/homebrew/heim.rb` checksums in a homebrew tap

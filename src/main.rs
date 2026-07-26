@@ -34,12 +34,13 @@ use collect::{DirSize, Sample, SizeBackendKind};
 #[derive(Parser, Debug)]
 #[command(
     name = "heim",
-    about = "Real-time project monitor for AI coding sessions: LOC, disk weight, git — TUI + JSON",
-    long_about = "Watch how much code an AI (or you) adds to a project in real time.\n\
+    about = "Stop vibe-code bloat: real-time LOC/size/git deltas + JSON agents can self-audit",
+    long_about = "Live project control surface for AI coding sessions.\n\
                   \n\
-                  TUI mode tracks languages, disk weight, and git. Machine mode \
-                  (`--once --json`) prints a detailed stats report agents can read, \
-                  and always refreshes `<project>/.heim/stats.json`.",
+                  TUI mode tracks languages, disk weight, git, and time-window \
+                  deltas (how many lines landed in the last 5m–2h). Machine mode \
+                  (`--once --json`) prints a detailed stats report agents can \
+                  self-audit against, and always refreshes `<project>/.heim/stats.json`.",
     version
 )]
 struct Cli {
@@ -305,7 +306,11 @@ fn event_loop(
             worker.request_full();
         }
 
-        // Always redraw on the 120Hz cadence for smooth spinners / pulse.
+        // The tick keeps advancing at 120Hz so animation pacing stays correct,
+        // but we only repaint when the frame would actually differ: state/input
+        // changed, or the quantized animation moved. Ratatui's double buffer
+        // saves terminal *bytes*, not CPU — `swap_buffers` resets the incoming
+        // buffer, so every `draw` re-renders all 1000+ lines of widget layout.
         app.bump_tick();
         let size = term.size()?;
         app.clamp_layout(size.height);
@@ -314,11 +319,17 @@ fn event_loop(
             _ => lang_vis,
         };
         app.ensure_sel_visible(vis);
-        term.draw(|f| {
-            let (lv, gv) = ui::draw(f, app);
-            lang_vis = lv;
-            git_vis = gv;
-        })?;
+
+        let anim = theme::anim_frame(app.tick);
+        if app.dirty || anim != app.last_anim {
+            app.last_anim = anim;
+            app.dirty = false;
+            term.draw(|f| {
+                let (lv, gv) = ui::draw(f, app);
+                lang_vis = lv;
+                git_vis = gv;
+            })?;
+        }
 
         // Drain input for the rest of the frame budget (keeps UI responsive at 120Hz).
         let mut quit = false;
@@ -330,6 +341,9 @@ fn event_loop(
             if !event::poll(remaining)? {
                 break;
             }
+            // Any delivered event can move focus, selection, layout or scroll —
+            // cheaper to repaint once than to prove which ones didn't.
+            app.dirty = true;
             match event::read()? {
                 Event::Key(key) => {
                     if key.kind != KeyEventKind::Press {

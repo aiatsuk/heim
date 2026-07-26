@@ -1,28 +1,57 @@
 [package]
-name = "heim"
+name = "heim-monitor"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
-description = "Real-time project monitor for AI coding sessions (LOC, size, git) — TUI + JSON"
+description = "Stop vibe-code bloat: real-time LOC/size/git deltas + JSON agents can self-audit"
 license = "MIT"
 readme = "README.md"
 authors = ["aiatsuk"]
 repository = "https://github.com/aiatsuk/heim"
 homepage = "https://github.com/aiatsuk/heim"
 documentation = "https://github.com/aiatsuk/heim#readme"
-keywords = ["cli", "tui", "cloc", "metrics", "monitor"]
+keywords = ["cli", "tui", "ai", "metrics", "monitor"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    "target/*",
+    ".heim/*",
+]
+
+# Binary stays `heim` (crate is `heim-monitor` — crates.io name `heim` is taken).
+[[bin]]
+name = "heim"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
+# Parallel, work-stealing directory walker (ripgrep's). Used as a raw walker —
+# heim applies its own ignore rules, not .gitignore (see `standard_filters`).
+ignore = "0.4"
 ratatui = "0.29"
+# FxHashMap: non-cryptographic hasher for the hot per-file size accumulation.
+rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-walkdir = "2"
+# In-process LOC counting. Replaces shelling out to `cloc` (a Perl script that
+# cost ~91% of every sample's wall clock and re-walked the whole tree).
+tokei = { version = "13", default-features = false }
+
+# cargo-binstall: pick the right GitHub Release asset.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/heim-{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
 
 [profile.release]
 lto = true
 codegen-units = 1
-strip = true
+# NOT `strip = true`: keeping function symbols keeps `samply` / `perf` /
+# Instruments output readable, which is the difference between profiling this
+# binary and guessing. Debug-map entries are still dropped.
+strip = "debuginfo"
+# Explicitly NOT `panic = "abort"`: `collect()` degrades gracefully by catching
+# collector-thread panics via `JoinHandle::join()`. Aborting would kill the TUI
+# instead of falling back to the walk engine.
+panic = "unwind"

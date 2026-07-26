@@ -72,6 +72,11 @@ pub struct App {
     pub loaded_from_store: usize,
     /// Frame counter for spinners / accent animation (paced for 120Hz UI).
     pub tick: u64,
+    /// Something changed that the current frame does not reflect — redraw.
+    /// Set by state updates, input, and resize; cleared after a draw.
+    pub dirty: bool,
+    /// Animation state of the last drawn frame; a change forces a redraw.
+    pub last_anim: crate::theme::AnimFrame,
     /// Keyboard focus for scroll / drill-down.
     pub focus: Focus,
     pub lang_sel: usize,
@@ -166,6 +171,8 @@ impl App {
             store,
             loaded_from_store,
             tick: 0,
+            dirty: true,
+            last_anim: crate::theme::AnimFrame::default(),
             focus: Focus::Lang,
             lang_sel: 0,
             lang_scroll: 0,
@@ -243,6 +250,7 @@ impl App {
     }
 
     pub fn apply_weight_listing(&mut self, path: PathBuf, total: u64, children: Vec<DirSize>) {
+        self.dirty = true;
         self.weight_cache.insert(path, (total, children.clone()));
         self.weight_total = total;
         self.weight_children = children;
@@ -258,6 +266,7 @@ impl App {
     /// Apply listing from cache if present. Returns true if served from cache.
     pub fn try_weight_from_cache(&mut self, path: &PathBuf) -> bool {
         if let Some((total, children)) = self.weight_cache.get(path).cloned() {
+            self.dirty = true;
             self.weight_total = total;
             self.weight_children = children;
             self.weight_loading = false;
@@ -365,8 +374,12 @@ impl App {
         if n > 0 {
             // borders(2) + working-tree line(1) + commits — don't leave a hollow panel
             // when the log is short; `git_h` is an upper cap (user drag).
-            let natural = n.saturating_add(3).clamp(5, max_git);
-            preferred.min(natural).max(5).min(max_git)
+            //
+            // On a very short terminal `max_git` floors at 3, below the natural
+            // minimum of 5. `clamp(5, max_git)` would then be an inverted range
+            // and panic, so apply the ceiling last instead.
+            let natural = n.saturating_add(3).max(5).min(max_git);
+            preferred.min(natural).max(3).min(max_git)
         } else {
             // Empty / error / loading: single status line.
             3.min(max_git)
@@ -519,6 +532,7 @@ impl App {
     }
 
     pub fn apply_sample(&mut self, s: Sample) {
+        self.dirty = true;
         self.prev = self.last.take();
         // Session baseline = first sample of *this* process, not disk history.
         if self.baseline.is_none() {
@@ -735,6 +749,32 @@ mod tests {
             git_err: None,
             duration: Duration::from_millis(1),
         }
+    }
+
+    /// `effective_git_h` used to build an inverted `clamp(5, max_git)` range and
+    /// panic outright whenever the terminal was shorter than 15 rows.
+    #[test]
+    fn git_height_survives_short_terminals() {
+        let dir = std::env::temp_dir().join(format!("heim-short-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = App::new(dir.clone(), 10, SizeBackendKind::Walk);
+
+        let mut s = sample(100, 1000, Duration::ZERO);
+        s.git = Some(crate::collect::GitStats {
+            branch: "main".into(),
+            ins: 0,
+            del: 0,
+            commits: vec![crate::collect::GitCommit::default(); 4],
+        });
+        app.last = Some(s);
+
+        for term_h in 0u16..40 {
+            app.clamp_layout(term_h);
+            let h = app.effective_git_h(term_h);
+            assert!(h >= 3, "term_h={term_h} gave git_h={h}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

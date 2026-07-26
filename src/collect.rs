@@ -1,20 +1,20 @@
-//! Background collectors: disk size (dust|walk), cloc, git.
+//! Background collectors: disk size (dust|walk), LOC, git.
 
-use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
-use walkdir::WalkDir;
+use ignore::{WalkBuilder, WalkState};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::fmt;
 
-/// Directories skipped for size walk / dust and passed to cloc --exclude-dir.
+/// Directories skipped for size walk / dust and passed to tokei as excludes.
 /// Includes common JS/Rust/Flutter/iOS/Android build dumps so monorepos stay responsive.
 pub const IGNORE_DIRS: &[&str] = &[
     ".git",
@@ -44,7 +44,6 @@ pub const IGNORE_DIRS: &[&str] = &[
     ".firebase",
     ".dart-index",
     "xcshareddata",
-    ".gradle",
     "ephemeral",
     // Heavy monorepo dumps (Swift/.build, AI agent caches, packaging)
     "artifacts",
@@ -56,9 +55,10 @@ pub const IGNORE_DIRS: &[&str] = &[
 ];
 
 /// Soft timeouts so a 9GB monorepo cannot freeze the TUI forever.
-const CLOC_TIMEOUT: Duration = Duration::from_secs(45);
 const DUST_TIMEOUT: Duration = Duration::from_secs(20);
 const GIT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Availability probes (`dust --version`, `git rev-parse`) — must answer fast.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Commit log size: subject/hash only (no per-file numstat — that deadlocks + is huge).
 const GIT_LOG_LIMIT: usize = 100;
 
@@ -153,28 +153,17 @@ pub struct Sample {
     pub duration: Duration,
 }
 
-fn dust_available() -> bool {
-    static OK: OnceLock<bool> = OnceLock::new();
-    *OK.get_or_init(|| {
-        Command::new("dust")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
-}
-
+/// `auto` resolves to the in-process walk.
+///
+/// Measured on a ~4k-file / 80MB Rust tree: the parallel walk takes ~17ms, the
+/// `dust` subprocess ~920ms — 53x slower, because heim pays a process spawn, a
+/// pipe drain and ~34 `-X` arguments to get a number it can compute itself.
+/// `dust` stays available via `--size-backend dust`; it does hardlink dedup the
+/// walk does not, so the two report slightly different totals.
 pub fn resolve_engine(pref: SizeBackendKind) -> SizeEngine {
     match pref {
         SizeBackendKind::Dust => SizeEngine::Dust,
-        SizeBackendKind::Walk => SizeEngine::Walk,
-        SizeBackendKind::Auto => {
-            if dust_available() {
-                SizeEngine::Dust
-            } else {
-                SizeEngine::Walk
-            }
-        }
+        SizeBackendKind::Walk | SizeBackendKind::Auto => SizeEngine::Walk,
     }
 }
 
@@ -182,21 +171,21 @@ pub fn collect(path: &Path, size_pref: SizeBackendKind) -> Sample {
     let t0 = Instant::now();
     let engine = resolve_engine(size_pref);
     let path_size = path.to_path_buf();
-    let path_cloc = path.to_path_buf();
+    let path_loc = path.to_path_buf();
     let path_git = path.to_path_buf();
 
-    // Parallel collectors — large monorepos must not serialize cloc+dust+git.
-    let h_size = thread::spawn(move || measure_size(&path_size, engine));
-    let h_cloc = thread::spawn(move || run_cloc(&path_cloc));
-    let h_git = thread::spawn(move || run_git(&path_git));
+    // Parallel collectors — sample latency is the slowest one, not their sum.
+    let h_size = thread::spawn(move || timed("size", || measure_size(&path_size, engine)));
+    let h_loc = thread::spawn(move || timed("loc", || run_loc(&path_loc)));
+    let h_git = thread::spawn(move || timed("git", || run_git(&path_git)));
 
     let (size_bytes, top_dirs, size_engine) = h_size.join().unwrap_or_else(|_| {
         let (b, t) = measure_size_walk(path, Some(20));
         (b, t, SizeEngine::Walk)
     });
-    let (loc, loc_err) = match h_cloc
+    let (loc, loc_err) = match h_loc
         .join()
-        .unwrap_or_else(|_| Err(anyhow::anyhow!("cloc worker panicked")))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("loc worker panicked")))
     {
         Ok(l) => (Some(l), None),
         Err(e) => (None, Some(short_err(&e.to_string()))),
@@ -250,6 +239,10 @@ fn run_timed(mut cmd: Command, timeout: Duration) -> Result<std::process::Output
     });
 
     let start = Instant::now();
+    // Adaptive backoff: a flat 20ms poll added up to 20ms of pure sleep to every
+    // command, and the git collector runs five of them. Start tight for the
+    // common fast case, then relax so a slow command does not spin.
+    let mut poll = Duration::from_millis(1);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -261,7 +254,10 @@ fn run_timed(mut cmd: Command, timeout: Duration) -> Result<std::process::Output
                 let _ = stderr_h.join();
                 bail!("timed out after {}s", timeout.as_secs());
             }
-            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                thread::sleep(poll);
+                poll = (poll * 2).min(Duration::from_millis(20));
+            }
             Err(e) => {
                 let _ = child.kill();
                 let _ = stdout_h.join();
@@ -280,6 +276,22 @@ fn run_timed(mut cmd: Command, timeout: Duration) -> Result<std::process::Output
     })
 }
 
+/// Per-collector timing, printed when `HEIM_TRACE=1`.
+///
+/// Sample latency is the slowest collector, not their sum, so a regression in
+/// one is invisible in the total until it becomes the max. Keep this cheap and
+/// always available — guessing which collector dominates is how heim ended up
+/// shipping a 45s `cloc` timeout nobody had measured.
+fn timed<T>(label: &str, f: impl FnOnce() -> T) -> T {
+    if std::env::var_os("HEIM_TRACE").is_none() {
+        return f();
+    }
+    let t0 = Instant::now();
+    let out = f();
+    eprintln!("heim[trace] {label:>5}: {:>8.2?}", t0.elapsed());
+    out
+}
+
 fn short_err(s: &str) -> String {
     let s = s.trim();
     if s.chars().count() > 80 {
@@ -289,8 +301,32 @@ fn short_err(s: &str) -> String {
     }
 }
 
+/// `IGNORE_DIRS` as a hash set.
+///
+/// The linear `[&str]::contains` this replaces ran once per directory entry and
+/// again per file, so a 100k-entry tree spent millions of string comparisons
+/// just deciding what to skip.
+fn ignore_set() -> &'static FxHashSet<&'static str> {
+    static SET: OnceLock<FxHashSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| IGNORE_DIRS.iter().copied().collect())
+}
+
 fn is_ignored(name: &str) -> bool {
-    IGNORE_DIRS.contains(&name)
+    ignore_set().contains(name)
+}
+
+/// Skip rule shared by the size walk and its `filter_entry` prune.
+fn skip_name(name: &str) -> bool {
+    is_ignored(name) || name.starts_with('.')
+}
+
+/// Worker count for the parallel walk. Capped — this is syscall-bound work and
+/// returns flatten out well before core count on any real tree.
+fn walk_threads() -> usize {
+    thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, 12)
 }
 
 /// Fast children listing for drill-down — one-pass walk (never dust).
@@ -315,57 +351,107 @@ pub fn measure_size(root: &Path, engine: SizeEngine) -> (u64, Vec<DirSize>, Size
     }
 }
 
-/// Single WalkDir pass: attribute every file to its first path component under `root`.
-/// O(files) once — not O(children × files). Critical for monorepo drill-down speed.
-pub fn measure_size_walk(root: &Path, limit: Option<usize>) -> (u64, Vec<DirSize>) {
-    use std::collections::HashMap;
+/// Per-thread size accumulator.
+///
+/// Each walker thread owns one and merges it into the shared result exactly
+/// once, on drop, when its visitor is torn down. Nothing is shared or locked on
+/// the per-file hot path — the pattern `ignore` documents for `WalkParallel`.
+struct SizeAcc {
+    total: u64,
+    tops: FxHashMap<String, u64>,
+    sink: mpsc::Sender<(u64, FxHashMap<String, u64>)>,
+}
 
-    let mut total = 0u64;
-    let mut tops: HashMap<String, u64> = HashMap::new();
+impl Drop for SizeAcc {
+    fn drop(&mut self) {
+        let _ = self.sink.send((self.total, std::mem::take(&mut self.tops)));
+    }
+}
+
+/// One parallel pass: attribute every file to its first path component under `root`.
+/// O(files) once — not O(children × files). Critical for monorepo drill-down speed.
+///
+/// Uses `ignore` purely as a work-stealing walker: `standard_filters(false)` keeps
+/// heim's own [`IGNORE_DIRS`] + dotfile rules authoritative and does not consult
+/// `.gitignore`, so reported sizes stay comparable to previous releases.
+pub fn measure_size_walk(root: &Path, limit: Option<usize>) -> (u64, Vec<DirSize>) {
+    let mut tops: FxHashMap<String, u64> = FxHashMap::default();
 
     // Ensure zero-byte top-level entries still appear.
     if let Ok(rd) = std::fs::read_dir(root) {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if is_ignored(&name) || name.starts_with('.') {
+            if skip_name(&name) {
                 continue;
             }
             tops.entry(name).or_insert(0);
         }
     }
 
-    let walker = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            if e.depth() == 0 {
-                return true;
-            }
-            e.file_name()
-                .to_str()
-                .map(|n| !is_ignored(n) && !n.starts_with('.'))
-                .unwrap_or(true)
-        });
+    let (tx, rx) = mpsc::channel::<(u64, FxHashMap<String, u64>)>();
+    let root_owned = root.to_path_buf();
 
-    for ent in walker.flatten() {
-        if ent.depth() == 0 {
-            continue;
-        }
-        let Ok(meta) = ent.metadata() else {
-            continue;
-        };
-        if !meta.is_file() {
-            continue;
-        }
-        let len = meta.len();
-        total = total.saturating_add(len);
-        if let Ok(rel) = ent.path().strip_prefix(root) {
-            if let Some(comp) = rel.components().next() {
-                let key = comp.as_os_str().to_string_lossy().into_owned();
-                if !is_ignored(&key) && !key.starts_with('.') {
-                    *tops.entry(key).or_default() += len;
+    WalkBuilder::new(root)
+        .standard_filters(false)
+        .follow_links(false)
+        .threads(walk_threads())
+        .filter_entry(|e| {
+            e.depth() == 0
+                || e.file_name()
+                    .to_str()
+                    .map(|n| !skip_name(n))
+                    .unwrap_or(true)
+        })
+        .build_parallel()
+        .run(|| {
+            let mut acc = SizeAcc {
+                total: 0,
+                tops: FxHashMap::default(),
+                sink: tx.clone(),
+            };
+            let root = root_owned.clone();
+            Box::new(move |res| {
+                let Ok(ent) = res else {
+                    return WalkState::Continue;
+                };
+                if ent.depth() == 0 {
+                    return WalkState::Continue;
                 }
-            }
+                // `file_type()` comes from readdir — cheaper than stat'ing dirs.
+                if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    return WalkState::Continue;
+                }
+                let Ok(meta) = ent.metadata() else {
+                    return WalkState::Continue;
+                };
+                let len = meta.len();
+                acc.total = acc.total.saturating_add(len);
+                if let Ok(rel) = ent.path().strip_prefix(&root) {
+                    if let Some(comp) = rel.components().next() {
+                        let key = comp.as_os_str().to_string_lossy();
+                        if !skip_name(&key) {
+                            // Only allocate the key the first time we see it.
+                            match acc.tops.get_mut(key.as_ref()) {
+                                Some(v) => *v = v.saturating_add(len),
+                                None => {
+                                    acc.tops.insert(key.into_owned(), len);
+                                }
+                            }
+                        }
+                    }
+                }
+                WalkState::Continue
+            })
+        });
+    // Drop our handle so `rx` terminates once every worker has merged.
+    drop(tx);
+
+    let mut total = 0u64;
+    for (part_total, part) in rx {
+        total = total.saturating_add(part_total);
+        for (k, v) in part {
+            let e = tops.entry(k).or_default();
+            *e = e.saturating_add(v);
         }
     }
 
@@ -480,76 +566,70 @@ fn parse_dust_line(line: &str) -> Option<(u64, String)> {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ClocJson {
-    #[serde(rename = "SUM")]
-    sum: Option<ClocSum>,
-    #[serde(flatten)]
-    rest: BTreeMap<String, serde_json::Value>,
-}
+/// Count lines in-process with `tokei`.
+///
+/// Replaces shelling out to `cloc`, which dominated every sample: on a ~4k-file
+/// Rust tree `cloc` took ~8.5s of a 9.4s sample (a Perl process that re-walked
+/// the whole tree a second time), and it silently lost *all* LOC stats whenever
+/// it appended its "files took longer than expected" warning after the JSON —
+/// trailing bytes that `serde_json` rejects.
+///
+/// Unlike `cloc`, `tokei` honours `.gitignore`, so generated-but-tracked-as-
+/// ignored files no longer inflate the count. Totals therefore differ slightly
+/// from pre-0.2 releases.
+fn run_loc(path: &Path) -> Result<LocStats> {
+    use tokei::{Config, Languages};
 
-#[derive(Debug, Deserialize)]
-struct ClocSum {
-    blank: u64,
-    comment: u64,
-    code: u64,
-    #[serde(rename = "nFiles")]
-    n_files: u64,
-}
+    let config = Config::default();
+    let mut languages = Languages::new();
+    languages.get_statistics(&[path], IGNORE_DIRS, &config);
 
-fn run_cloc(path: &Path) -> Result<LocStats> {
-    let exclude = IGNORE_DIRS.join(",");
-    let mut cmd = Command::new("cloc");
-    cmd.args(["--json", "--quiet", "--exclude-dir", &exclude])
-        .arg(path);
-    let out = run_timed(cmd, CLOC_TIMEOUT).context("cloc (is it installed?)")?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        bail!("cloc failed: {}", err.trim());
+    let mut langs: Vec<LangStat> = languages
+        .iter()
+        .filter_map(|(ty, lang)| {
+            let sum = lang.summarise();
+            if sum.code == 0 && sum.reports.is_empty() {
+                return None;
+            }
+            Some(LangStat {
+                name: ty.name().to_string(),
+                blank: sum.blanks as u64,
+                comment: sum.comments as u64,
+                code: sum.code as u64,
+            })
+        })
+        .collect();
+
+    let total = languages.total();
+    let files = languages
+        .values()
+        .map(|l| l.summarise().reports.len() as u64)
+        .sum();
+
+    if files == 0 {
+        bail!("no countable source files found");
     }
-    let raw = String::from_utf8_lossy(&out.stdout);
-    let json = raw.find('{').map(|i| &raw[i..]).unwrap_or(&raw);
-    let parsed: ClocJson = serde_json::from_str(json).context("parse cloc json")?;
-    let sum = parsed.sum.context("cloc SUM missing")?;
-    let mut langs = Vec::new();
-    for (k, v) in parsed.rest {
-        if k == "header" || k == "SUM" {
-            continue;
-        }
-        let code = v.get("code").and_then(|c| c.as_u64()).unwrap_or(0);
-        let files = v
-            .get("nFiles")
-            .or_else(|| v.get("files"))
-            .and_then(|c| c.as_u64())
-            .unwrap_or(0);
-        let blank = v.get("blank").and_then(|c| c.as_u64()).unwrap_or(0);
-        let comment = v.get("comment").and_then(|c| c.as_u64()).unwrap_or(0);
-        if code > 0 || files > 0 {
-            langs.push(LangStat {
-                name: k,
-                blank,
-                comment,
-                code,
-            });
-        }
-    }
+
     langs.sort_by(|a, b| b.code.cmp(&a.code));
     langs.truncate(16);
+
     Ok(LocStats {
-        files: sum.n_files,
-        blank: sum.blank,
-        comment: sum.comment,
-        code: sum.code,
+        files,
+        blank: total.blanks as u64,
+        comment: total.comments as u64,
+        code: total.code as u64,
         langs,
     })
 }
 
 fn git_ok(path: &Path) -> bool {
-    Command::new("git")
-        .args(["-C"])
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(path)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()
+        .args(["rev-parse", "--is-inside-work-tree"]);
+    // Bounded: a bare `.output()` here can block the collector forever — e.g. on
+    // a stale network mount or a repo whose index is locked.
+    run_timed(cmd, PROBE_TIMEOUT)
         .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
         .unwrap_or(false)
 }
@@ -587,17 +667,28 @@ fn run_git(path: &Path) -> Result<Option<GitStats>> {
     if !git_ok(path) {
         return Ok(None);
     }
-    let branch = git_out(path, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .unwrap_or_else(|_| "HEAD".into())
-        .trim()
-        .to_string();
+    // Four independent invocations. Run them concurrently: in series they cost
+    // the sum of four spawn+wait round-trips, and `git log --shortstat` over a
+    // large history dominates the rest.
+    let (p_branch, p_unstaged) = (path.to_path_buf(), path.to_path_buf());
+    let (p_staged, p_log) = (path.to_path_buf(), path.to_path_buf());
 
+    let h_branch = thread::spawn(move || {
+        git_out(&p_branch, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .unwrap_or_else(|_| "HEAD".into())
+            .trim()
+            .to_string()
+    });
     // Working-tree stats: numstat is fine (usually << pipe buffer). On huge
     // dirty trees, shortstat is a fallback if numstat fails/times out.
-    let (u_ins, u_del) = git_diff_stat(path, false);
-    let (s_ins, s_del) = git_diff_stat(path, true);
+    let h_unstaged = thread::spawn(move || git_diff_stat(&p_unstaged, false));
+    let h_staged = thread::spawn(move || git_diff_stat(&p_staged, true));
+    let h_log = thread::spawn(move || recent_commits(&p_log, GIT_LOG_LIMIT));
 
-    let commits = recent_commits(path, GIT_LOG_LIMIT);
+    let branch = h_branch.join().unwrap_or_else(|_| "HEAD".into());
+    let (u_ins, u_del) = h_unstaged.join().unwrap_or((0, 0));
+    let (s_ins, s_del) = h_staged.join().unwrap_or((0, 0));
+    let commits = h_log.join().unwrap_or_default();
 
     Ok(Some(GitStats {
         branch,

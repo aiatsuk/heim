@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="420" viewBox="0 0 920 420" role="img" aria-labelledby="title desc">
+  <title id="title">heim TUI demo</title>
+  <desc id="desc">Mock terminal showing heim live LOC deltas during an AI coding session</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e1e2e"/>
+      <stop offset="100%" stop-color="#181825"/>
+    </linearGradient>
+    <style>
+      .t { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; }
+      .dim { fill: #6c7086; }
+      .fg { fill: #cdd6f4; }
+      .green { fill: #a6e3a1; }
+      .peach { fill: #fab387; }
+      .blue { fill: #89b4fa; }
+      .mauve { fill: #cba6f7; }
+      .yellow { fill: #f9e2af; }
+      .red { fill: #f38ba8; }
+      .sky { fill: #89dceb; }
+      .border { fill: none; stroke: #45475a; stroke-width: 1.2; }
+    </style>
+  </defs>
+
+  <!-- window chrome -->
+  <rect width="920" height="420" rx="12" fill="url(#bg)"/>
+  <rect x="0" y="0" width="920" height="36" rx="12" fill="#11111b"/>
+  <rect x="0" y="24" width="920" height="12" fill="#11111b"/>
+  <circle cx="22" cy="18" r="6" fill="#f38ba8"/>
+  <circle cx="42" cy="18" r="6" fill="#f9e2af"/>
+  <circle cx="62" cy="18" r="6" fill="#a6e3a1"/>
+  <text x="460" y="22" text-anchor="middle" class="t dim">heim — stop vibe-code bloat</text>
+
+  <!-- monitor panel -->
+  <rect x="16" y="48" width="888" height="92" rx="6" class="border"/>
+  <text x="28" y="68" class="t mauve">┌ monitor</text>
+  <text x="28" y="90" class="t fg">my-app  ~/code/my-app  every 10s · just now  </text>
+  <text x="470" y="90" class="t green">○ live</text>
+  <text x="28" y="112" class="t fg">code </text>
+  <text x="68" y="112" class="t yellow">12,480</text>
+  <text x="120" y="112" class="t dim">  files 86  blank 1,204  comments 890  size 4.2M</text>
+  <text x="28" y="132" class="t sky">◆ Δ 5m </text>
+  <text x="90" y="132" class="t green">+120</text>
+  <text x="130" y="132" class="t sky">  10m </text>
+  <text x="180" y="132" class="t green">+340</text>
+  <text x="220" y="132" class="t sky">  30m </text>
+  <text x="270" y="132" class="t peach">+910</text>
+  <text x="310" y="132" class="t sky">  1h </text>
+  <text x="350" y="132" class="t red">+2.1k</text>
+  <text x="400" y="132" class="t sky">  2h </text>
+  <text x="440" y="132" class="t red">+4.8k</text>
+  <text x="500" y="132" class="t dim">  · top Rust 71%</text>
+
+  <!-- languages -->
+  <rect x="16" y="152" width="430" height="150" rx="6" class="border"/>
+  <text x="28" y="172" class="t mauve">languages</text>
+  <text x="28" y="198" class="t dim">#  language     code      %</text>
+  <text x="28" y="220" class="t fg">1  Rust         8,900    71%</text>
+  <text x="28" y="242" class="t fg">2  Markdown     1,200    10%</text>
+  <text x="28" y="264" class="t fg">3  TypeScript     980     8%</text>
+  <text x="28" y="286" class="t green">   session Δ           +4.8k</text>
+
+  <!-- weight -->
+  <rect x="458" y="152" width="446" height="150" rx="6" class="border"/>
+  <text x="470" y="172" class="t mauve">weight</text>
+  <text x="470" y="198" class="t dim">#  path                 size     %</text>
+  <text x="470" y="220" class="t fg">1  › src                3.1M    74%</text>
+  <text x="470" y="242" class="t fg">2  › generated          620K    14%</text>
+  <text x="470" y="264" class="t dim">3  › target          …ignored…</text>
+  <text x="470" y="286" class="t peach">   drill-down ready · Enter</text>
+
+  <!-- git -->
+  <rect x="16" y="314" width="888" height="70" rx="6" class="border"/>
+  <text x="28" y="334" class="t mauve">git</text>
+  <text x="28" y="356" class="t blue">feature/agent</text>
+  <text x="150" y="356" class="t green">+42</text>
+  <text x="190" y="356" class="t red">-8</text>
+  <text x="28" y="376" class="t dim">a1b2c3d  +120/-3  feat: scaffold generated module</text>
+
+  <!-- footer -->
+  <text x="28" y="408" class="t dim">q quit  r refresh  +/− interval  ? help   ·  agent: heim --once --json .</text>
+</svg>

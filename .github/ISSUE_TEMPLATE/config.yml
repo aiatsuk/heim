@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Agent JSON contract
+    url: https://github.com/aiatsuk/heim/blob/main/docs/for-agents.md
+    about: Schema heim.stats.v1 and self-audit prompts
+  - name: Launch / publish checklist
+    url: https://github.com/aiatsuk/heim/blob/main/docs/PUBLISH.md
+    about: Releases, crates.io, Homebrew

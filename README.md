@@ -1,23 +1,24 @@
 # heim
 
-**Real-time project monitor for AI coding sessions** — LOC, disk weight, git, and time-window deltas in a compact TUI, plus JSON stats agents can read.
+**Stop vibe-code bloat: real-time LOC/size/git deltas + JSON agents can self-audit.**
 
-```text
-┌ monitor ──────────────────────────────────────────────────────────────────┐
-│ my-app  ~/code/my-app  every 60s · just now  ○ live                       │
-│ code 12,480  files 86  blank 1,204  comments 890  size 4.2M               │
-│ ◆ Δ 5m +120  10m +340  30m +910  1h +2.1k  2h +4.8k  · top Rust 71%       │
-├ languages ───────────────┬ weight ────────────────────────────────────────┤
-│ # language   code     %  │ #  path              size     %                │
-│ 1 Rust       8,900   71% │ 1 › src              3.1M    74%               │
-│ 2 Markdown   1,200   10% │ 2 › target           …ignored…                 │
-├ git ──────────────────────────────────────────────────────────────────────┤
-│ feature/agent  +42  -8                                                    │
-│ a1b2c3d  +120/-3  feat: scaffold generated module                         │
-└───────────────────────────────────────────────────────────────────────────┘
-```
+Live control surface for AI coding sessions — languages, disk weight, git, and time-window deltas in a compact TUI, plus machine-readable stats your agent can query.
 
-> **Name note:** Unrelated to the older [heim](https://crates.io/crates/heim) system-information crate on crates.io.
+[![CI](https://github.com/aiatsuk/heim/actions/workflows/ci.yml/badge.svg)](https://github.com/aiatsuk/heim/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![crates.io](https://img.shields.io/crates/v/heim-monitor.svg)](https://crates.io/crates/heim-monitor)
+
+> **Name note:** Unrelated to the older [heim](https://crates.io/crates/heim) system-information crate.  
+> **crates.io package:** [`heim-monitor`](https://crates.io/crates/heim-monitor) · **binary:** `heim`
+
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="heim demo: AI session adds thousands of LOC, ALERT fires, agent self-audits with JSON, cleanup drops Δ" width="920" />
+</p>
+
+<sub>
+Story: quiet project → agent scaffolds → Δ / 2h spikes → <code>ALERT</code> → <code>heim --once --json</code> self-audit → cleanup.  
+Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a href="docs/demo.tape">docs/demo.tape</a> (VHS).
+</sub>
 
 ---
 
@@ -30,7 +31,7 @@ Coding agents and LLMs changed the bottleneck. You no longer wait on typing spee
 - A single session can add **thousands of lines** in minutes (scaffolds, “just in case” modules, duplicated helpers, verbose comments, dead experiments).
 - The tree **grows quietly**: new folders, fat assets, generated junk next to real product code.
 - Git history fills with large commits that are hard to review after the fact.
-- Classic tools (`cloc`, `du`, `git log`) answer one-off questions. They do **not** sit beside the agent and show *how much landed in the last 5 minutes / 2 hours*.
+- Classic tools (`tokei`, `cloc`, `du`, `git log`) answer one-off questions. They do **not** sit beside the agent and show *how much landed in the last 5 minutes / 2 hours*.
 - Without a live control surface, “vibe-coded” repos tend toward **bloat**: hard to navigate, expensive to review, and full of code nobody asked to keep.
 
 The failure mode is not “AI can’t code.” It’s **unbounded volume without feedback**.
@@ -69,14 +70,15 @@ heim --once --json .
 
 ## Features
 
-- **Languages** — `cloc` totals and per-language ranking (code, blank, comments, %)
-- **Weight** — top paths by size; directory drill-down; `dust` or walk
-- **Git** — branch, dirty +/- , recent commits, activity strip
+- **Languages** — in-process LOC (tokei): totals and per-language ranking (code, blank, comments, %)
+- **Weight** — top paths by size; directory drill-down; fast parallel walk (optional `dust`)
+- **Git** — branch, dirty +/-, recent commits, activity strip
 - **Deltas** — wall-clock windows **5m / 10m / 30m / 1h / 2h** in the TUI; JSON also includes **4h / 8h / 1d**
 - **JSON for agents** — `heim --once --json` (+ optional `-o file`) and auto-updated `.heim/stats.json`
+- **Hints / soft alerts** — JSON `hints[]` flags high 30m / 2h volume (`ALERT:` lines)
 - **Private store** — `.heim/` history for cross-session windows
 - **Headless text** — `heim --once` human-readable sample
-- **Single binary** — no daemon, no network
+- **Single binary** — no daemon, no network, **no required external LOC tool**
 
 ---
 
@@ -85,30 +87,62 @@ heim --once --json .
 | Dependency | Required? | Role |
 |------------|-----------|------|
 | [Rust](https://rustup.rs/) **1.74+** | to build / install from source | MSRV |
-| [`cloc`](https://github.com/AlDanial/cloc) | **yes** (for LOC) | language stats |
 | [`git`](https://git-scm.com/) | recommended | git panel / commits |
-| [`dust`](https://github.com/bootandy/dust) | optional | faster size backend |
+| [`dust`](https://github.com/bootandy/dust) | optional | alternate size backend (`--size-backend dust`) |
+
+LOC counting is **built in** (via [tokei](https://github.com/XAMPPRocky/tokei)). No `cloc` install needed.
 
 ```bash
-# macOS
-brew install cloc dust
-
-# Debian / Ubuntu
-sudo apt install cloc
-cargo install du-dust   # binary name: dust
+# optional faster/alternate disk backend
+brew install dust          # macOS
+cargo install du-dust      # binary name: dust
 ```
 
 ---
 
 ## Install
 
+### Prebuilt binaries (GitHub Releases)
+
+When a version is tagged (`v0.1.0`, …), downloads appear at  
+https://github.com/aiatsuk/heim/releases
+
+```bash
+# one-liner (macOS / Linux) — needs a published release
+curl -fsSL https://raw.githubusercontent.com/aiatsuk/heim/main/scripts/install.sh | bash
+
+# manual example (Apple Silicon) — adjust version/target
+curl -sL "https://github.com/aiatsuk/heim/releases/download/v0.1.0/heim-0.1.0-aarch64-apple-darwin.tar.gz" \
+  | tar -xz
+sudo mv heim /usr/local/bin/
+```
+
+### cargo / crates.io
+
+```bash
+# package name is heim-monitor; installs the `heim` binary
+cargo install heim-monitor --locked
+```
+
+### From git / clone
+
 ```bash
 cargo install --git https://github.com/aiatsuk/heim --locked
 
-# or from a clone
+# or
 git clone https://github.com/aiatsuk/heim.git
 cd heim && cargo install --path . --locked
 ```
+
+### cargo-binstall
+
+```bash
+cargo binstall heim-monitor
+```
+
+### Homebrew (tap formula template)
+
+A formula sketch lives in [`dist/homebrew/heim.rb`](dist/homebrew/heim.rb) for use in a personal tap once release checksums are filled in.
 
 ---
 
@@ -147,10 +181,16 @@ Options:
   -V, --version
 ```
 
+`auto` size backend uses the in-process parallel walk (usually much faster than shelling out to `dust`). Use `--size-backend dust` if you want dust’s hardlink accounting.
+
 ### JSON report (`heim.stats.v1`)
 
 ```bash
-heim --once --json . | jq '{code: .loc.code, d2h: .deltas[] | select(.window=="2h")}'
+heim --once --json . | jq '{
+  code: .loc.code,
+  d2h: (.deltas[] | select(.window=="2h")),
+  alerts: [.hints[] | select(startswith("ALERT:"))]
+}'
 ```
 
 Includes:
@@ -159,11 +199,11 @@ Includes:
 |-------|---------|
 | `loc` | code / files / blank / comment + per-language breakdown |
 | `size` | bytes, human size, engine, top directories |
-| `git` | branch, dirty +/- , recent commits |
+| `git` | branch, dirty +/-, recent commits |
 | `deltas[]` | per window: `ready`, `code`, `size_bytes`, git `insertions` / `deletions` (5m…1d) |
 | `session` | deltas since this process baseline |
 | `history` | sample count, span, store path |
-| `hints` | short guidance for agents / humans |
+| `hints` | short guidance for agents / humans (may include `ALERT:`) |
 
 Every sample (TUI or `--once`) also refreshes:
 
@@ -175,9 +215,11 @@ so an agent can either **shell out** to `heim --once --json` or **read the file*
 
 ### Example agent prompt
 
-> Run `heim --once --json .` in the project root. Look at `deltas` for `"2h"`.
-> If `code` is large, list the heaviest paths under `size.top` and recent
-> `git.recent_commits`, then remove dead generated code and re-check.
+> Run `heim --once --json .` in the project root. Look at `deltas` for `"30m"` and `"2h"`.
+> If `code` is large (or any `hints` line starts with `ALERT:`), list the heaviest paths
+> under `size.top` and recent `git.recent_commits`, then remove dead generated code and re-check.
+
+Full contract + skill: **[docs/for-agents.md](docs/for-agents.md)** · **[skills/heim-audit](skills/heim-audit/SKILL.md)**
 
 ---
 
@@ -214,8 +256,10 @@ Click to focus/select, wheel to scroll, drag the vertical rail or git top edge t
 
 ## Smart ignores
 
-Skips common heavy dirs for size + `cloc`, including:  
+Skips common heavy dirs for size + LOC, including:  
 `.git`, `node_modules`, `target`, `dist`, `build`, `.venv`, `__pycache__`, `.next`, `vendor`, `.heim`, `.dart_tool`, `.build`, and similar monorepo dumps.
+
+LOC also respects `.gitignore` (tokei).
 
 ---
 
@@ -236,7 +280,7 @@ Local only — do not commit. heim does not send data over the network.
 
 ## How it works
 
-1. Background worker runs `cloc`, size (`dust`/walk), and `git` in parallel.
+1. Background worker counts LOC in-process (tokei), measures size (walk or `dust`), and samples `git` in parallel.
 2. UI thread stays smooth (~120 Hz animations); collectors never block paint.
 3. Samples append to `.heim/samples.jsonl` and rewrite `.heim/stats.json`.
 4. Time windows use wall-clock history (this session + store), so “last 2 hours” works across restarts.
@@ -248,8 +292,8 @@ Local only — do not commit. heim does not send data over the network.
 | Platform | Status |
 |----------|--------|
 | **macOS** | Primary |
-| **Linux** | Expected to work |
-| **Windows** | Untested |
+| **Linux** | CI-tested |
+| **Windows** | Experimental (CI allowed to fail) |
 
 UTF-8 terminal recommended.
 
@@ -259,11 +303,12 @@ UTF-8 terminal recommended.
 
 | Symptom | Fix |
 |---------|-----|
-| Empty languages | Install `cloc` on `PATH` |
-| Slow huge monorepos | Prefer `dust`; check ignores |
+| Empty languages | No countable source under ignores / `.gitignore` |
+| Slow huge monorepos | Check ignores; try `--size-backend walk` (default) |
 | Git panel empty | Not a repo / no `git` — rest still works |
 | `deltas[].ready == false` | Not enough history yet — keep sampling |
 | Agent sees stale numbers | Re-run `heim --once --json .` |
+| `cargo install heim` fails | Use **`cargo install heim-monitor`** (name clash on crates.io) |
 
 ---
 
@@ -281,13 +326,24 @@ cargo build --release
 src/
   main.rs     CLI, event loop, worker
   app.rs      state, deltas, focus
-  collect.rs  cloc / size / git
+  collect.rs  LOC / size / git
   report.rs   JSON report for agents
   store.rs    .heim persistence
   ui.rs       ratatui
   theme.rs    colors / glyphs
   fmt.rs      formatting helpers
 ```
+
+### Docs for launch & agents
+
+| Doc | Purpose |
+|-----|---------|
+| [docs/for-agents.md](docs/for-agents.md) | JSON contract `heim.stats.v1` + agent prompt |
+| [skills/heim-audit](skills/heim-audit/SKILL.md) | Drop-in agent skill |
+| [docs/skill-packaging.md](docs/skill-packaging.md) | Wire skill into Claude/Cursor/Codex |
+| [docs/launch-post.md](docs/launch-post.md) | Show HN / Reddit / X drafts |
+| [docs/soft-feedback.md](docs/soft-feedback.md) | Pre-launch 5-user outreach |
+| [docs/PUBLISH.md](docs/PUBLISH.md) | Tag, crates.io, Homebrew checklist |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
 
@@ -297,16 +353,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
 
 | Tool | Focus |
 |------|--------|
-| [`cloc`](https://github.com/AlDanial/cloc) / [`tokei`](https://github.com/XAMPPRocky/tokei) | One-shot LOC |
+| [`tokei`](https://github.com/XAMPPRocky/tokei) / [`cloc`](https://github.com/AlDanial/cloc) | One-shot LOC |
 | [`dust`](https://github.com/bootandy/dust) | Disk usage |
 | `git` / lazygit | Full VCS workflows |
-| heim | **Live + agent-readable project growth control** |
+| **heim** | **Live + agent-readable project growth control** |
 
 ---
 
 ## Security
 
-Local tool: reads the project, shells out to `cloc` / `git` / optional `dust`, writes under `.heim/`. See [SECURITY.md](SECURITY.md).
+Local tool: reads the project, shells out to `git` / optional `dust`, writes under `.heim/`. See [SECURITY.md](SECURITY.md).
 
 ---
 

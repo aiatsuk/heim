@@ -219,16 +219,33 @@ impl Report {
         let mut hints = Vec::new();
         hints.push(
             "Compare deltas[].code and deltas[].insertions/deletions for window \"2h\" \
-             (cloc net LOC vs git commit churn)."
+             (net LOC vs git commit churn)."
                 .into(),
         );
         hints.push(
-            "Re-run `heim --once --json .` or read <project>/.heim/stats.json after monitoring."
+            "Re-run `heim --once --json .` or read <project>/.heim/stats.json after large edits."
                 .into(),
         );
+        if let Some(d) = deltas.iter().find(|d| d.window == "30m") {
+            if let Some(code) = d.code {
+                if code > 1_000 {
+                    hints.push(format!(
+                        "ALERT: code +{code} over 30m — stop and delete unused generated code"
+                    ));
+                } else if code > 300 {
+                    hints.push(format!(
+                        "code +{code} over 30m — review size.top and recent commits for bloat"
+                    ));
+                }
+            }
+        }
         if let Some(d) = deltas.iter().find(|d| d.window == "2h") {
             if let Some(code) = d.code {
-                if code > 500 {
+                if code > 2_000 {
+                    hints.push(format!(
+                        "ALERT: code +{code} over 2h — high vibe-code volume; trim before continuing"
+                    ));
+                } else if code > 500 {
                     hints.push(format!(
                         "code +{code} over 2h — review generated files for cleanup"
                     ));
@@ -242,11 +259,19 @@ impl Report {
                 );
             }
         }
+        if let Some(top) = size.top.first() {
+            if top.pct >= 40.0 {
+                hints.push(format!(
+                    "heaviest path \"{}\" is {:.0}% of tree size — drill there first",
+                    top.name, top.pct
+                ));
+            }
+        }
 
         Report {
             schema: "heim.stats.v1",
             version: env!("CARGO_PKG_VERSION"),
-            purpose: "AI / agent project metrics: LOC, size, git, and time-window deltas",
+            purpose: "Stop vibe-code bloat: real-time LOC/size/git deltas for agent self-audit",
             path,
             collected_at: unix_to_rfc3339(collected_at_unix),
             collected_at_unix,
@@ -328,7 +353,7 @@ fn empty_report(path: String, app: &App) -> Report {
     Report {
         schema: "heim.stats.v1",
         version: env!("CARGO_PKG_VERSION"),
-        purpose: "AI / agent project metrics: LOC, size, git, and time-window deltas",
+        purpose: "Stop vibe-code bloat: real-time LOC/size/git deltas for agent self-audit",
         path,
         collected_at: unix_to_rfc3339(now_unix()),
         collected_at_unix: now_unix(),

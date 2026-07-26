@@ -170,6 +170,35 @@ pub fn pulse_brightness(tick: u64, speed: f32) -> f32 {
     s * s
 }
 
+/// Quantization steps for the pulse gradient.
+///
+/// The pulse is the only continuously-animating element, so it alone decided the
+/// redraw rate. Sampling it in 16 steps over its ~2s cycle drops idle repaints
+/// from 120/s to ~16/s with no visible banding (each step moves an 8-bit channel
+/// by a handful of values).
+pub const PULSE_STEPS: u16 = 16;
+
+/// Everything on screen that changes purely with `tick`.
+///
+/// The event loop redraws only when this differs from the previous frame (or
+/// when state/input marked the app dirty). Ratatui's double buffer diffs
+/// *terminal writes*, not CPU: `swap_buffers` resets the incoming buffer, so an
+/// unconditional `draw` re-renders every widget regardless of what changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AnimFrame {
+    spinner: u64,
+    monitor: u64,
+    pulse: u16,
+}
+
+pub fn anim_frame(tick: u64) -> AnimFrame {
+    AnimFrame {
+        spinner: tick / SPINNER_DIVISOR.max(1),
+        monitor: tick / MONITOR_DIVISOR.max(1),
+        pulse: (pulse_brightness(tick, PULSE_SPEED) * PULSE_STEPS as f32) as u16,
+    }
+}
+
 /// Blend accent toward dim by pulse (for live status icon color).
 pub fn pulse_color(tick: u64, bright: Color, dim: Color) -> Color {
     let p = pulse_brightness(tick, PULSE_SPEED);

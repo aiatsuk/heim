@@ -508,7 +508,7 @@ fn draw_lang_table(f: &mut Frame, area: Rect, app: &App, th: &Theme) -> usize {
     } else {
         String::new()
     };
-    // Title: no redundant "cloc · N lines" when monitor already has code total
+    // Title: no redundant "LOC · N lines" when monitor already has code total
     let title = if n > 0 {
         format!("languages · {n}{scroll}")
     } else {
