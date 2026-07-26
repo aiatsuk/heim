@@ -1023,6 +1023,123 @@ mod tests {
     }
 
     #[test]
+    fn bench_draw() {
+        if std::env::var("HEIM_BENCH").is_err() {
+            return;
+        }
+        let root = PathBuf::from(std::env::var("HEIM_BENCH_DIR").unwrap_or("/tmp".into()));
+        let mut app = App::new(root.clone(), 60, SizeBackendKind::Walk);
+        let mut s = sample_fixture();
+        // realistic: 20 weight children that exist on disk, 16 langs, 100 commits
+        let mut kids = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&root) {
+            for e in rd.flatten().take(20) {
+                kids.push(DirSize {
+                    name: e.file_name().to_string_lossy().into_owned(),
+                    bytes: 1234,
+                });
+            }
+        }
+        s.top_dirs = kids;
+        if let Some(l) = s.loc.as_mut() {
+            l.langs = (0..16)
+                .map(|i| LangStat {
+                    name: format!("Lang{i}"),
+                    blank: 10,
+                    comment: 20,
+                    code: 1000 - i,
+                })
+                .collect();
+        }
+        if let Some(g) = s.git.as_mut() {
+            g.commits = (0..100)
+                .map(|i| crate::collect::GitCommit {
+                    short: format!("abc{i:04}"),
+                    subject: format!("feat: some reasonably long commit subject number {i}"),
+                    author: "developer".into(),
+                    ins: 12,
+                    del: 3,
+                })
+                .collect();
+            g.ins = 40;
+            g.del = 12;
+        }
+        app.apply_sample(s);
+        // history size from env
+        let hist: usize = std::env::var("HEIM_HIST")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        app.history.clear();
+        for i in 0..hist {
+            let mut h = sample_fixture();
+            h.wall = SystemTime::now() - Duration::from_secs((hist - i) as u64 * 10);
+            h.git = None;
+            h.top_dirs = vec![];
+            app.history.push_back(h);
+        }
+        app.refreshing = false;
+        let backend = TestBackend::new(120, 40);
+        let mut term = Terminal::new(backend).unwrap();
+        // warm
+        for _ in 0..5 {
+            term.draw(|f| {
+                let _ = draw(f, &mut app);
+            })
+            .unwrap();
+        }
+        let n = 200;
+        let t0 = Instant::now();
+        for _ in 0..n {
+            app.bump_tick();
+            term.draw(|f| {
+                let _ = draw(f, &mut app);
+            })
+            .unwrap();
+        }
+        let per = t0.elapsed() / n;
+        eprintln!("draw: {per:?}/frame  (hist={hist})");
+        use std::sync::atomic::Ordering::Relaxed;
+        let a0 = crate::ALLOCS.load(Relaxed);
+        let b0 = crate::BYTES.load(Relaxed);
+        for _ in 0..10 {
+            app.bump_tick();
+            term.draw(|f| {
+                let _ = draw(f, &mut app);
+            })
+            .unwrap();
+        }
+        eprintln!(
+            "allocs/frame: {}  bytes/frame: {}",
+            (crate::ALLOCS.load(Relaxed) - a0) / 10,
+            (crate::BYTES.load(Relaxed) - b0) / 10
+        );
+
+        // isolate: window deltas only
+        let t1 = Instant::now();
+        for _ in 0..n {
+            std::hint::black_box(app.code_window_deltas());
+        }
+        eprintln!(
+            "code_window_deltas: {:?}/call (hist={hist})",
+            t1.elapsed() / n
+        );
+
+        // isolate: is_dir stats for 20 rows
+        let t2 = Instant::now();
+        for _ in 0..n {
+            for d in &app.weight_children {
+                std::hint::black_box(app.weight_cwd().join(&d.name).is_dir());
+            }
+        }
+        eprintln!(
+            "is_dir x{} rows: {:?}/frame",
+            app.weight_children.len(),
+            t2.elapsed() / n
+        );
+    }
+
+    #[test]
     fn dump_layouts_for_qa() {
         if std::env::var("HEIM_DUMP").is_err() {
             return;

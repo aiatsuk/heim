@@ -72,7 +72,7 @@ pub fn hum_dur(secs: u64) -> String {
 pub fn hum_interval(secs: u64) -> String {
     if secs < 60 {
         format!("{secs}s")
-    } else if secs % 60 == 0 {
+    } else if secs.is_multiple_of(60) {
         format!("{}m", secs / 60)
     } else {
         format!("{}m{}s", secs / 60, secs % 60)
@@ -94,7 +94,7 @@ pub fn num(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
+        if i > 0 && i.is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);

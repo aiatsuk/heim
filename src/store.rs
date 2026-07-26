@@ -110,7 +110,7 @@ impl Store {
         append_jsonl(&self.root.join("samples.jsonl"), &row)?;
         self.samples_written += 1;
         // cheap periodic rotate every 64 writes
-        if self.samples_written % 64 == 0 {
+        if self.samples_written.is_multiple_of(64) {
             let _ = self.compact_samples();
         }
         Ok(())

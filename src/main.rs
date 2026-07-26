@@ -131,6 +131,27 @@ impl Worker {
     }
 }
 
+pub struct CountingAlloc;
+pub static ALLOCS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        ALLOCS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        BYTES.fetch_add(l.size() as u64, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.alloc(l)
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        std::alloc::System.dealloc(p, l)
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
+        ALLOCS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        BYTES.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.realloc(p, l, n)
+    }
+}
+#[global_allocator]
+static GA: CountingAlloc = CountingAlloc;
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("heim: {e:#}");
