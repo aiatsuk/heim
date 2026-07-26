@@ -466,6 +466,37 @@ pub fn measure_size_walk(root: &Path, limit: Option<usize>) -> (u64, Vec<DirSize
     (total, top_dirs)
 }
 
+/// Escape a literal directory name for use inside a regex alternation.
+fn regex_escape(s: &str) -> String {
+    const META: &[char] = &[
+        '.', '+', '*', '?', '(', ')', '|', '[', ']', '{', '}', '^', '$', '\\', '/', '-',
+    ];
+    let mut out = String::with_capacity(s.len() + 4);
+    for c in s.chars() {
+        if META.contains(&c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// [`IGNORE_DIRS`] as a path regex for dust's `--invert-filter`.
+///
+/// dust's `-X/--ignore-directory` takes a full **path**, not a directory name,
+/// so the previous `-X build -X node_modules …` invocation excluded nothing that
+/// wasn't a top-level match: on a Flutter monorepo it reported **7.0G** where the
+/// real non-build total was **11M**. `-v/--invert-filter` matches a regex against
+/// whole file paths, which is what heim actually wants. The surrounding slashes
+/// keep it to whole path components, so a *file* named `build` still counts.
+fn dust_ignore_regex() -> &'static str {
+    static RE: OnceLock<String> = OnceLock::new();
+    RE.get_or_init(|| {
+        let alts: Vec<String> = IGNORE_DIRS.iter().map(|d| regex_escape(d)).collect();
+        format!("/({})/", alts.join("|"))
+    })
+}
+
 /// dust -d1 -b -c -s -i with shared ignores. Parse human sizes + names.
 pub fn measure_size_dust(root: &Path) -> Result<(u64, Vec<DirSize>)> {
     let mut cmd = Command::new("dust");
@@ -475,9 +506,7 @@ pub fn measure_size_dust(root: &Path) -> Result<(u64, Vec<DirSize>)> {
         "-s", // apparent size
         "-i", // ignore hidden
     ]);
-    for d in IGNORE_DIRS {
-        cmd.arg("-X").arg(d);
-    }
+    cmd.arg("-v").arg(dust_ignore_regex());
     cmd.arg(root);
     let out = run_timed(cmd, DUST_TIMEOUT).context("dust")?;
     if !out.status.success() {
@@ -664,7 +693,7 @@ fn numstat_sum(text: &str) -> (u64, u64, u64) {
 }
 
 fn run_git(path: &Path) -> Result<Option<GitStats>> {
-    if !git_ok(path) {
+    if !timed("probe", || git_ok(path)) {
         return Ok(None);
     }
     // Four independent invocations. Run them concurrently: in series they cost
@@ -674,16 +703,16 @@ fn run_git(path: &Path) -> Result<Option<GitStats>> {
     let (p_staged, p_log) = (path.to_path_buf(), path.to_path_buf());
 
     let h_branch = thread::spawn(move || {
-        git_out(&p_branch, &["rev-parse", "--abbrev-ref", "HEAD"])
+        timed("branch", || git_out(&p_branch, &["rev-parse", "--abbrev-ref", "HEAD"]))
             .unwrap_or_else(|_| "HEAD".into())
             .trim()
             .to_string()
     });
     // Working-tree stats: numstat is fine (usually << pipe buffer). On huge
     // dirty trees, shortstat is a fallback if numstat fails/times out.
-    let h_unstaged = thread::spawn(move || git_diff_stat(&p_unstaged, false));
-    let h_staged = thread::spawn(move || git_diff_stat(&p_staged, true));
-    let h_log = thread::spawn(move || recent_commits(&p_log, GIT_LOG_LIMIT));
+    let h_unstaged = thread::spawn(move || timed("unstg", || git_diff_stat(&p_unstaged, false)));
+    let h_staged = thread::spawn(move || timed("stged", || git_diff_stat(&p_staged, true)));
+    let h_log = thread::spawn(move || timed("log", || recent_commits(&p_log, GIT_LOG_LIMIT)));
 
     let branch = h_branch.join().unwrap_or_else(|_| "HEAD".into());
     let (u_ins, u_del) = h_unstaged.join().unwrap_or((0, 0));
@@ -902,6 +931,30 @@ mod tests {
         assert!(bytes < 1000, "ignored node_modules weight: {bytes}");
         assert!(tops.iter().any(|d| d.name == "a.rs"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// dust's `-X` matches whole paths, not names, so heim's old
+    /// `-X build -X node_modules …` never pruned a nested build dir.
+    #[test]
+    fn dust_regex_matches_nested_components() {
+        let re = dust_ignore_regex();
+        assert!(re.starts_with("/("), "{re}");
+        assert!(re.ends_with(")/"), "{re}");
+        // Dots must be escaped or `.git` would match `xgit`, `1git`, ...
+        assert!(re.contains(r"\.git|"), "{re}");
+        assert!(re.contains(r"\.dart_tool"), "{re}");
+        assert!(re.contains("node_modules"), "{re}");
+        // Every ignore dir is represented.
+        for d in IGNORE_DIRS {
+            assert!(re.contains(&regex_escape(d)), "missing {d} in {re}");
+        }
+    }
+
+    #[test]
+    fn regex_escape_escapes_metachars() {
+        assert_eq!(regex_escape(".git"), r"\.git");
+        assert_eq!(regex_escape("node_modules"), "node_modules");
+        assert_eq!(regex_escape(".pub-cache"), r"\.pub\-cache");
     }
 
     #[test]

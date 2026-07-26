@@ -29,7 +29,8 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
-          - os: macos-13
+          # Cross-compile Intel macOS from arm64 runners (macos-13 queue is often starved).
+          - os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
           - os: windows-latest

@@ -86,7 +86,7 @@ heim --once --json .
 
 | Dependency | Required? | Role |
 |------------|-----------|------|
-| [Rust](https://rustup.rs/) **1.85+** | to build / install from source | MSRV |
+| [Rust](https://rustup.rs/) **1.88+** | to build / install from source | MSRV |
 | [`git`](https://git-scm.com/) | recommended | git panel / commits |
 | [`dust`](https://github.com/bootandy/dust) | optional | alternate size backend (`--size-backend dust`) |
 
