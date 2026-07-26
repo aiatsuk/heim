@@ -8,3 +8,7 @@ docs/private/
 *.swo
 .idea/
 .vscode/
+
+__pycache__/
+*.pyc
+.Python
