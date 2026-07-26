@@ -285,7 +285,7 @@ fn draw_insight_line(app: &App, th: &Theme, inner_w: usize) -> Line<'static> {
     if used_est + 12 < inner_w {
         let chips = app.insight_chips();
         if !chips.is_empty() {
-            let room = inner_w.saturating_sub(used_est + 3).max(0);
+            let room = inner_w.saturating_sub(used_est + 3);
             let joined = chips.join(" · ");
             let tail = fmt::truncate_middle(&joined, room);
             if !tail.is_empty() {

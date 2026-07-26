@@ -570,12 +570,12 @@ fn event_loop(
                                 }
                             }
                         }
-                        MouseEventKind::Down(MouseButton::Middle) => {
-                            if contains(app.hit.weight, col, row) {
-                                app.focus = Focus::Weight;
-                                if let Some(p) = app.weight_enter() {
-                                    worker.request_weight(p);
-                                }
+                        MouseEventKind::Down(MouseButton::Middle)
+                            if contains(app.hit.weight, col, row) =>
+                        {
+                            app.focus = Focus::Weight;
+                            if let Some(p) = app.weight_enter() {
+                                worker.request_weight(p);
                             }
                         }
                         _ => {}

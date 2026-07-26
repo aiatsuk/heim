@@ -2,7 +2,8 @@
 name = "heim-monitor"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.74"
+# Lockfile format v4 + current deps need a recent stable toolchain.
+rust-version = "1.85"
 description = "Stop vibe-code bloat: real-time LOC/size/git deltas + JSON agents can self-audit"
 license = "MIT"
 readme = "README.md"

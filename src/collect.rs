@@ -459,7 +459,7 @@ pub fn measure_size_walk(root: &Path, limit: Option<usize>) -> (u64, Vec<DirSize
         .into_iter()
         .map(|(name, bytes)| DirSize { name, bytes })
         .collect();
-    top_dirs.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    top_dirs.sort_by_key(|b| std::cmp::Reverse(b.bytes));
     if let Some(n) = limit {
         top_dirs.truncate(n);
     }
@@ -526,7 +526,7 @@ pub fn parse_dust_output(raw: &str, root: &Path) -> Result<(u64, Vec<DirSize>)> 
     if total == 0 {
         total = tops.iter().map(|d| d.bytes).sum();
     }
-    tops.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    tops.sort_by_key(|b| std::cmp::Reverse(b.bytes));
     // dedupe names keep first (largest)
     let mut seen = std::collections::HashSet::new();
     tops.retain(|d| seen.insert(d.name.clone()));
@@ -610,7 +610,7 @@ fn run_loc(path: &Path) -> Result<LocStats> {
         bail!("no countable source files found");
     }
 
-    langs.sort_by(|a, b| b.code.cmp(&a.code));
+    langs.sort_by_key(|b| std::cmp::Reverse(b.code));
     langs.truncate(16);
 
     Ok(LocStats {

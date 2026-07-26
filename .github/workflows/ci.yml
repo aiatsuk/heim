@@ -57,12 +57,11 @@ jobs:
           grep -q '"version"' heim-stats.json
 
   msrv:
-    name: MSRV 1.74
+    name: MSRV 1.85
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.74.0
+      - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
-      - name: build
-        # Generate lock on older toolchain if needed; prefer --locked when lock is MSRV-clean.
-        run: cargo build
+      - name: build --locked
+        run: cargo build --locked
