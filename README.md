@@ -34,8 +34,8 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 | **code** | 5,588 LOC |
 | **files** | 26 |
 | **size** | 517K |
-| **updated** | 2026-07-26T19:18:55Z UTC |
-| **history** | 5 samples in [`docs/metrics/`](docs/metrics/) |
+| **updated** | 2026-07-27T07:29:19Z UTC |
+| **history** | 6 samples in [`docs/metrics/`](docs/metrics/) |
 
 #### Top 7 languages
 
@@ -55,14 +55,14 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 
 | Window | LOC Δ | Size Δ | Git +/− | Ready |
 |--------|------:|-------:|--------:|:-----:|
-| **1d** (today) | `+5,588` | `+517.0K` | `+10,498/−598` | since birth |
-| **3d** (3 days) | `+5,588` | `+517.0K` | `+10,498/−598` | since birth |
-| **1w** (1 week) | `+5,588` | `+517.0K` | `+10,498/−598` | since birth |
-| **2w** (2 weeks) | `+5,588` | `+517.0K` | `+10,498/−598` | since birth |
-| **1mo** (1 month) | `+5,588` | `+517.0K` | `+10,498/−598` | since birth |
-| **2mo** (2 months) | `+5,588` | `+517.0K` | `+10,498/−598` | since birth |
-| **6mo** (6 months) | `+5,588` | `+517.0K` | `+10,498/−598` | since birth |
-| **1y** (1 year) | `+5,588` | `+517.0K` | `+10,498/−598` | since birth |
+| **1d** (today) | `+5,588` | `+517.1K` | `+10,564/−663` | since birth |
+| **3d** (3 days) | `+5,588` | `+517.1K` | `+10,564/−663` | since birth |
+| **1w** (1 week) | `+5,588` | `+517.1K` | `+10,564/−663` | since birth |
+| **2w** (2 weeks) | `+5,588` | `+517.1K` | `+10,564/−663` | since birth |
+| **1mo** (1 month) | `+5,588` | `+517.1K` | `+10,564/−663` | since birth |
+| **2mo** (2 months) | `+5,588` | `+517.1K` | `+10,564/−663` | since birth |
+| **6mo** (6 months) | `+5,588` | `+517.1K` | `+10,564/−663` | since birth |
+| **1y** (1 year) | `+5,588` | `+517.1K` | `+10,564/−663` | since birth |
 
 LOC/size Δ use committed samples in [`docs/metrics/samples.jsonl`](docs/metrics/samples.jsonl). If the repo is younger than a window, Ready shows **since birth** (full history). Git +/− is always from live `git log --shortstat`. Languages are the top 7 from the same sample as the TUI **languages** panel.
 
