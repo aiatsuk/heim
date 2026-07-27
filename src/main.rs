@@ -335,8 +335,9 @@ fn print_once(path: &std::path::Path, s: &Sample) {
     } else if let Some(e) = &s.git_err {
         println!("git:    {e}");
     }
-    let host_stats = host::HostMonitor::sample_once();
+    let (host_stats, host_mon) = host::HostMonitor::sample_once();
     println!("host:   {}", host::format_line(&host_stats));
+    println!("ping:   {}", host::format_ping_history_line(&host_mon, 80));
     println!("took:   {:.2}s", s.duration.as_secs_f64());
 }
 

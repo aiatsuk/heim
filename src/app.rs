@@ -543,14 +543,14 @@ impl App {
 
     pub fn clamp_layout(&mut self, term_h: u16) {
         self.lang_pct = self.lang_pct.clamp(30, 70);
-        // Leave room for monitor(6)+ranks(min4)+footer(1); git may collapse to 3.
-        let max_git = term_h.saturating_sub(11).max(3);
+        // Leave room for monitor(7)+ranks(min4)+footer(1); git may collapse to 3.
+        let max_git = term_h.saturating_sub(12).max(3);
         self.git_h = self.git_h.clamp(3, max_git);
     }
 
     /// Preferred git panel height for this frame (auto-collapse when empty).
     pub fn effective_git_h(&self, term_h: u16) -> u16 {
-        let max_git = term_h.saturating_sub(11).max(3);
+        let max_git = term_h.saturating_sub(12).max(3);
         let preferred = self.git_h.clamp(3, max_git);
         let n = self
             .last

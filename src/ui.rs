@@ -1,5 +1,7 @@
 //! Compact interactive dashboard: monitor, ranks, git — responsive, no dupe noise.
 
+use std::time::Duration;
+
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -89,7 +91,7 @@ pub fn draw(f: &mut Frame, app: &mut App) -> (usize, usize) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6), // monitor: title + 4 lines (incl. host)
+            Constraint::Length(7), // monitor: title + 5 lines (host + ping hist)
             Constraint::Min(4),    // ranks (main workspace)
             Constraint::Length(git_h),
             Constraint::Length(1), // footer
@@ -112,7 +114,7 @@ pub fn draw(f: &mut Frame, app: &mut App) -> (usize, usize) {
     draw_footer(f, root[3], app, &th);
 
     if app.help {
-        draw_help(f, centered(area, 72, 20), &th);
+        draw_help(f, centered(area, 72, 22), &th);
     }
     (lang_vis.max(1), git_vis.max(1))
 }
@@ -219,11 +221,14 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App, th: &Theme) {
         Line::from(spans)
     };
 
-    // Line 2: host CPU / RAM / network rates.
+    // Line 2: host CPU / RAM / network rates / current ping.
     let line2 = draw_host_line(app, th, inner_w);
 
-    // Line 3: Δcode windows (5m…2h) + secondary insight chips.
-    let line3 = if app.last.is_none() {
+    // Line 3: ping sparkline (30m) + avg/max windows 5m/10m/30m.
+    let line3 = draw_ping_history_line(app, th, inner_w);
+
+    // Line 4: Δcode windows (5m…2h) + secondary insight chips.
+    let line4 = if app.last.is_none() {
         Line::from(vec![
             Span::styled(format!("{BULLET_DIAMOND} "), Style::default().fg(th.accent)),
             Span::styled(
@@ -245,7 +250,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App, th: &Theme) {
         "monitor".into()
     };
     f.render_widget(
-        Paragraph::new(vec![line0, line1, line2, line3]).block(panel(
+        Paragraph::new(vec![line0, line1, line2, line3, line4]).block(panel(
             th,
             &title,
             false,
@@ -253,6 +258,76 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App, th: &Theme) {
         )),
         area,
     );
+}
+
+fn draw_ping_history_line(app: &App, th: &Theme, inner_w: usize) -> Line<'static> {
+    if app.host.ping_history_len() == 0 {
+        return Line::from(vec![
+            dim_label(th, "ping "),
+            Span::styled("—".to_string(), th.dim()),
+            dim_label(th, "  5m "),
+            Span::styled("—".to_string(), th.dim()),
+            dim_label(th, "  10m "),
+            Span::styled("—".to_string(), th.dim()),
+            dim_label(th, "  30m "),
+            Span::styled("—".to_string(), th.dim()),
+            Span::styled(
+                if app.ping_in_flight {
+                    "  …".to_string()
+                } else {
+                    "  (avg/max ms)".to_string()
+                },
+                th.dim(),
+            ),
+        ]);
+    }
+
+    let spark_w = if inner_w >= 56 {
+        12
+    } else if inner_w >= 40 {
+        8
+    } else {
+        6
+    };
+    let spark = app.host.ping_sparkline(spark_w);
+
+    let mut spans = vec![
+        dim_label(th, "ping "),
+        Span::styled(spark, th.bright().add_modifier(Modifier::BOLD)),
+    ];
+
+    let n_win = if inner_w < 48 {
+        1 // 5m only
+    } else if inner_w < 64 {
+        2 // 5m 10m
+    } else {
+        3 // 5m 10m 30m
+    };
+
+    for &(secs, label) in crate::host::PING_WINDOWS.iter().take(n_win) {
+        spans.push(dim_label(th, &format!("  {label} ")));
+        match app.host.ping_window_stats(Duration::from_secs(secs)) {
+            Some(st) => {
+                let txt = format!(
+                    "{}/{}",
+                    fmt::fmt_ping_short(st.avg),
+                    fmt::fmt_ping_short(st.max)
+                );
+                // Highlight if max is much higher than avg (jittery).
+                let st_style = if st.max > st.avg * 2.0 && st.max > 20.0 {
+                    Style::default().fg(th.accent_error)
+                } else {
+                    th.body()
+                };
+                spans.push(Span::styled(txt, st_style));
+            }
+            None => spans.push(Span::styled("—".to_string(), th.dim())),
+        }
+    }
+    if inner_w >= 72 {
+        spans.push(Span::styled("  avg/max".to_string(), th.dim()));
+    }
+    Line::from(spans)
 }
 
 fn draw_host_line(app: &App, th: &Theme, inner_w: usize) -> Line<'static> {
@@ -964,7 +1039,8 @@ heim — compact project monitor\n\
   backspace / right-click  parent dir\n\
 \n\
 monitor  name · path · every Ns · age · live\n\
-         totals · host (CPU/RAM/net 3s · ping 5m avg 1.1.1.1+8.8.8.8 + GW)\n\
+         totals · host (CPU/RAM/net 3s · ping 5m 1.1.1.1+8.8.8.8 + GW)\n\
+         ping spark 30m · avg/max over 5m/10m/30m\n\
          Δ code over 5m/10m/30m/1h/2h\n\
 weight   path-first · size or LOC · › folders · cache\n\
 git      auto-collapses when empty · height fits log";

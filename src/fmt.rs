@@ -194,6 +194,18 @@ pub fn fmt_ping_ms(ms: f64) -> String {
     }
 }
 
+/// Compact RTT number without unit (for avg/max pairs): `6.2`, `12`, `150`.
+pub fn fmt_ping_short(ms: f64) -> String {
+    let ms = ms.max(0.0);
+    if ms >= 100.0 {
+        format!("{ms:.0}")
+    } else if ms >= 10.0 {
+        format!("{ms:.1}")
+    } else {
+        format!("{ms:.2}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +274,8 @@ mod tests {
         assert_eq!(fmt_ping_ms(14.2), "14.2 ms");
         assert_eq!(fmt_ping_ms(0.43), "0.43 ms");
         assert_eq!(fmt_ping_ms(150.0), "150 ms");
+        assert_eq!(fmt_ping_short(14.2), "14.2");
+        assert_eq!(fmt_ping_short(6.25), "6.25");
+        assert_eq!(fmt_ping_short(150.0), "150");
     }
 }
