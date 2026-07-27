@@ -65,3 +65,38 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: build --locked
         run: cargo build --locked
+
+  # The TUI is the part CI never exercised — every panic found so far lived
+  # here, including one that only fired on terminals shorter than 15 rows.
+  tui-smoke:
+    name: TUI smoke (tiny terminals)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: render at hostile sizes
+        run: cargo test --all-targets -- --nocapture ui::tests
+
+  package:
+    name: cargo package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Verifies `exclude` keeps the tarball lean and that the crate still
+      # builds from the packaged sources alone.
+      - name: list packaged files
+        run: cargo package --locked --list
+      - name: build from tarball
+        run: cargo package --locked
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources

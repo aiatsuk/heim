@@ -121,7 +121,7 @@ heim --once --json .
 ## Features
 
 - **Languages** — in-process LOC (tokei): totals and per-language ranking (code, blank, comments, %)
-- **Weight** — top paths by size; directory drill-down; fast parallel walk (optional `dust`)
+- **Weight** — top paths by **size** (bytes) or **code** (LOC); directory drill-down in both modes (`m` to toggle); optional `dust` for size
 - **Git** — branch, dirty +/-, recent commits, activity strip
 - **Deltas** — wall-clock windows **5m / 10m / 30m / 1h / 2h** in the TUI; JSON also includes **4h / 8h / 1d**
 - **JSON for agents** — `heim --once --json` (+ optional `-o file`) and auto-updated `.heim/stats.json`
@@ -248,7 +248,7 @@ Includes:
 | Field | Meaning |
 |-------|---------|
 | `loc` | code / files / blank / comment + per-language breakdown |
-| `size` | bytes, human size, engine, top directories |
+| `size` | bytes, human size, engine, top directories (skips ignored + dot-entries — not `du -sh`) |
 | `git` | branch, dirty +/-, recent commits |
 | `deltas[]` | per window: `ready`, `code`, `size_bytes`, git `insertions` / `deletions` (5m…1d) |
 | `session` | deltas since this process baseline |
@@ -281,7 +281,7 @@ Full contract + skill: **[docs/for-agents.md](docs/for-agents.md)** · **[skills
 |-------|----------|
 | **monitor** | Path · interval · age · live state · LOC totals · size · Δ code 5m–2h |
 | **languages** | Ranked languages + session Δ |
-| **weight** | Ranked paths + drill-down |
+| **weight** | Ranked paths by **size** or **code** (LOC) + drill-down |
 | **git** | Branch · dirty +/- · commits · activity (collapses when empty) |
 | **footer** | Key hints |
 
@@ -296,6 +296,7 @@ Full contract + skill: **[docs/for-agents.md](docs/for-agents.md)** · **[skills
 | `j` `k` / arrows | Move selection |
 | `Enter` / `l` | Open weight directory |
 | `Backspace` / `h` | Weight parent |
+| `m` | Toggle weight metric: **size** (bytes) ↔ **code** (LOC) |
 | `?` | Help |
 
 ### Mouse

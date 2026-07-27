@@ -45,7 +45,7 @@ Exit code is non-zero only on hard failures (bad path, I/O). Missing git is not 
 | `took_secs` | f64 | Sample wall time |
 | `loc` | object\|null | Totals + per-language |
 | `loc_error` | string\|null | Why LOC failed |
-| `size` | object | bytes, human, engine, top paths |
+| `size` | object | bytes, human, engine, top paths. Excludes `IGNORE_DIRS` and every dot-entry, so it is **not** comparable to `du -sh` |
 | `git` | object\|null | branch, working tree +/-, recent commits |
 | `git_error` | string\|null | Why git missing |
 | `deltas[]` | array | Time windows (see below) |

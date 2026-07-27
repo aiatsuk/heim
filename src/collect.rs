@@ -61,6 +61,9 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Commit log size: subject/hash only (no per-file numstat — that deadlocks + is huge).
 const GIT_LOG_LIMIT: usize = 100;
+/// Rows kept in `size.top`. Shared by both backends — they used to disagree
+/// (walk 20, dust 12), so `size.top.len()` silently depended on the engine.
+const TOP_DIRS_LIMIT: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SizeBackendKind {
@@ -130,12 +133,54 @@ pub struct GitStats {
     pub del: u64,
     /// Recent commits (newest first), compact.
     pub commits: Vec<GitCommit>,
+    /// Per-commit churn over [`CHURN_WINDOW`], for windowed JSON deltas.
+    /// Collected with the sample so report building never shells out to git.
+    pub churn: Vec<CommitChurn>,
 }
 
+/// One row in the weight panel: a child path under the current drill-down root.
+///
+/// `bytes` holds the metric for the active mode — disk bytes in **size** mode,
+/// or code lines in **code** mode (see [`WeightMode`]). The field name is
+/// historical; UI formats it via the mode.
 #[derive(Debug, Clone)]
 pub struct DirSize {
     pub name: String,
     pub bytes: u64,
+}
+
+/// What the weight panel measures and drills into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum WeightMode {
+    /// Disk weight (bytes) — default, same as pre-mode behaviour.
+    #[default]
+    Size,
+    /// Lines of code (tokei), same engine as the languages panel.
+    Code,
+}
+
+impl WeightMode {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Size => Self::Code,
+            Self::Code => Self::Size,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Size => "size",
+            Self::Code => "code",
+        }
+    }
+
+    /// Column header in the weight table.
+    pub fn column(self) -> &'static str {
+        match self {
+            Self::Size => "size",
+            Self::Code => "code",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -156,10 +201,12 @@ pub struct Sample {
 /// `auto` resolves to the in-process walk.
 ///
 /// Measured on a ~4k-file / 80MB Rust tree: the parallel walk takes ~17ms, the
-/// `dust` subprocess ~920ms — 53x slower, because heim pays a process spawn, a
-/// pipe drain and ~34 `-X` arguments to get a number it can compute itself.
-/// `dust` stays available via `--size-backend dust`; it does hardlink dedup the
-/// walk does not, so the two report slightly different totals.
+/// `dust` subprocess ~920ms — 53x slower, because heim pays a process spawn and
+/// a pipe drain to get a number it can compute itself.
+///
+/// `dust` stays available via `--size-backend dust`. The two can still differ
+/// slightly: `dust` deduplicates hardlinked files, the walk counts them once per
+/// link (see [`measure_size_walk`]).
 pub fn resolve_engine(pref: SizeBackendKind) -> SizeEngine {
     match pref {
         SizeBackendKind::Dust => SizeEngine::Dust,
@@ -180,7 +227,7 @@ pub fn collect(path: &Path, size_pref: SizeBackendKind) -> Sample {
     let h_git = thread::spawn(move || timed("git", || run_git(&path_git)));
 
     let (size_bytes, top_dirs, size_engine) = h_size.join().unwrap_or_else(|_| {
-        let (b, t) = measure_size_walk(path, Some(20));
+        let (b, t) = measure_size_walk(path, Some(TOP_DIRS_LIMIT));
         (b, t, SizeEngine::Walk)
     });
     let (loc, loc_err) = match h_loc
@@ -220,16 +267,29 @@ pub fn collect(path: &Path, size_pref: SizeBackendKind) -> Sample {
 fn run_timed(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let tspawn = Instant::now();
+    // The sanctioned spawn: this function *is* the timeout + pipe-draining
+    // wrapper every other call site is required to go through. `#[expect]`
+    // rather than `#[allow]` so this fires if the ban is ever dropped.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "collect::run_timed is the wrapper"
+    )]
     let mut child = cmd.spawn().context("spawn")?;
     let spawn_took = tspawn.elapsed();
 
+    // Each reader signals EOF on this channel. EOF means the child closed the
+    // pipe, i.e. it has exited (or is about to) — so waiting on these is an
+    // exact completion signal, unlike polling `try_wait`.
+    let (tx_eof, rx_eof) = mpsc::channel::<()>();
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
+    let tx_out = tx_eof.clone();
     let stdout_h = thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(mut r) = stdout_pipe {
             let _ = r.read_to_end(&mut buf);
         }
+        let _ = tx_out.send(());
         buf
     });
     let stderr_h = thread::spawn(move || {
@@ -237,35 +297,48 @@ fn run_timed(mut cmd: Command, timeout: Duration) -> Result<std::process::Output
         if let Some(mut r) = stderr_pipe {
             let _ = r.read_to_end(&mut buf);
         }
+        let _ = tx_eof.send(());
         buf
     });
 
     let start = Instant::now();
-    // Adaptive backoff: a flat 20ms poll added up to 20ms of pure sleep to every
-    // command, and the git collector runs five of them. Start tight for the
-    // common fast case, then relax so a slow command does not spin.
-    let mut poll = Duration::from_millis(1);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                // Join readers so threads don't leak; discard partial output.
-                let _ = stdout_h.join();
-                let _ = stderr_h.join();
-                bail!("timed out after {}s", timeout.as_secs());
-            }
-            Ok(None) => {
-                thread::sleep(poll);
-                poll = (poll * 2).min(Duration::from_millis(20));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = stdout_h.join();
-                let _ = stderr_h.join();
-                return Err(e.into());
-            }
+    // Block on the pipes instead of sleeping. The previous backoff poll
+    // (1ms→20ms) charged every command up to a full quantum of pure sleep after
+    // it had already finished, and git runs five of them per sample. This is
+    // what `Command::output()` does — read both streams to EOF, then `wait()` —
+    // with the timeout enforced on the EOF wait rather than on a sleep loop.
+    let mut eofs = 0;
+    let timed_out = loop {
+        if eofs == 2 {
+            break false;
+        }
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            break true;
+        }
+        match rx_eof.recv_timeout(remaining) {
+            Ok(()) => eofs += 1,
+            Err(_) => break true,
+        }
+    };
+
+    if timed_out {
+        let _ = child.kill();
+        let _ = child.wait();
+        // Join readers so threads don't leak; discard partial output.
+        let _ = stdout_h.join();
+        let _ = stderr_h.join();
+        bail!("timed out after {}s", timeout.as_secs());
+    }
+
+    // Both pipes are at EOF, so this returns essentially immediately.
+    let status = match child.wait() {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = stdout_h.join();
+            let _ = stderr_h.join();
+            return Err(e.into());
         }
     };
 
@@ -344,18 +417,95 @@ pub fn list_children_fast(root: &Path) -> (u64, Vec<DirSize>) {
     measure_size_walk(root, None)
 }
 
+/// Children listing for weight drill-down in the active metric mode.
+pub fn list_children(root: &Path, mode: WeightMode) -> (u64, Vec<DirSize>) {
+    match mode {
+        WeightMode::Size => list_children_fast(root),
+        WeightMode::Code => list_children_code(root),
+    }
+}
+
+/// Code-line total under `path` via tokei (same engine as the languages panel).
+///
+/// Returns 0 when nothing is countable (empty tree, only ignored paths, etc.).
+pub fn code_lines_in(path: &Path) -> u64 {
+    use tokei::{Config, Languages};
+
+    let config = Config::default();
+    let mut languages = Languages::new();
+    languages.get_statistics(&[path], IGNORE_DIRS, &config);
+    languages.total().code as u64
+}
+
+/// Direct children of `root` ranked by **code lines** (tokei).
+///
+/// Each child path is counted once with tokei (directory or file). Runs children
+/// in parallel so drill-down stays responsive on monorepos with many packages.
+/// Ignored / dot names are skipped (same rules as the size walk).
+pub fn list_children_code(root: &Path) -> (u64, Vec<DirSize>) {
+    let mut entries: Vec<(String, PathBuf)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(root) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if skip_name(&name) {
+                continue;
+            }
+            entries.push((name, e.path()));
+        }
+    }
+
+    if entries.is_empty() {
+        return (0, Vec::new());
+    }
+
+    // Bounded fan-out: workers pop from a shared queue (pop is O(1) at the end).
+    let n_workers = walk_threads().min(entries.len()).max(1);
+    let queue = std::sync::Arc::new(std::sync::Mutex::new(entries));
+    let (out_tx, out_rx) = mpsc::channel::<(String, u64)>();
+
+    let mut handles = Vec::with_capacity(n_workers);
+    for _ in 0..n_workers {
+        let queue = std::sync::Arc::clone(&queue);
+        let out_tx = out_tx.clone();
+        handles.push(thread::spawn(move || loop {
+            let next = queue.lock().ok().and_then(|mut q| q.pop());
+            let Some((name, path)) = next else {
+                break;
+            };
+            let code = code_lines_in(&path);
+            let _ = out_tx.send((name, code));
+        }));
+    }
+    drop(out_tx);
+    for h in handles {
+        let _ = h.join();
+    }
+
+    let mut tops: Vec<DirSize> = Vec::new();
+    let mut total = 0u64;
+    for (name, code) in out_rx {
+        total = total.saturating_add(code);
+        tops.push(DirSize { name, bytes: code });
+    }
+
+    tops.sort_by_key(|b| std::cmp::Reverse(b.bytes));
+    // Keep zero-code children visible (empty dirs / non-source) so drill-down
+    // can still open them; sort already put zeros at the end.
+    (total, tops)
+}
+
 /// Prefer dust when requested/available; fall back to walk on error.
 pub fn measure_size(root: &Path, engine: SizeEngine) -> (u64, Vec<DirSize>, SizeEngine) {
     match engine {
         SizeEngine::Dust => match measure_size_dust(root) {
             Ok(v) => (v.0, v.1, SizeEngine::Dust),
             Err(_) => {
-                let (b, t) = measure_size_walk(root, Some(20));
+                let (b, t) = measure_size_walk(root, Some(TOP_DIRS_LIMIT));
                 (b, t, SizeEngine::Walk)
             }
         },
         SizeEngine::Walk => {
-            let (b, t) = measure_size_walk(root, Some(20));
+            let (b, t) = measure_size_walk(root, Some(TOP_DIRS_LIMIT));
             (b, t, SizeEngine::Walk)
         }
     }
@@ -369,12 +519,53 @@ pub fn measure_size(root: &Path, engine: SizeEngine) -> (u64, Vec<DirSize>, Size
 struct SizeAcc {
     total: u64,
     tops: FxHashMap<String, u64>,
-    sink: mpsc::Sender<(u64, FxHashMap<String, u64>)>,
+    /// `(device, inode)` of every multiply-linked file this thread counted.
+    ///
+    /// Only files with `nlink > 1` land here, so on a normal tree it stays
+    /// empty and costs nothing. Dedup happens in a single-threaded pass after
+    /// the walk — the same shape dust uses, because an inode set cannot be
+    /// shared across the walker threads without serialising the hot path.
+    links: Vec<(u64, u64, u64, String)>,
+    sink: mpsc::Sender<SizePart>,
+}
+
+/// One walker thread's contribution, merged after the walk.
+type SizePart = (u64, FxHashMap<String, u64>, Vec<(u64, u64, u64, String)>);
+
+/// `(device, inode)` identifying a file across hardlinks.
+///
+/// Unix only — `std` exposes no stable equivalent on Windows, so dedup degrades
+/// to a no-op there rather than reporting wrong numbers.
+#[cfg(unix)]
+fn hardlink_id(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    Some((meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+fn hardlink_id(_meta: &std::fs::Metadata) -> Option<(u64, u64)> {
+    None
+}
+
+/// Link count; `1` where the platform does not report one.
+#[cfg(unix)]
+fn nlink_of(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink()
+}
+
+#[cfg(not(unix))]
+fn nlink_of(_meta: &std::fs::Metadata) -> u64 {
+    1
 }
 
 impl Drop for SizeAcc {
     fn drop(&mut self) {
-        let _ = self.sink.send((self.total, std::mem::take(&mut self.tops)));
+        let _ = self.sink.send((
+            self.total,
+            std::mem::take(&mut self.tops),
+            std::mem::take(&mut self.links),
+        ));
     }
 }
 
@@ -398,7 +589,7 @@ pub fn measure_size_walk(root: &Path, limit: Option<usize>) -> (u64, Vec<DirSize
         }
     }
 
-    let (tx, rx) = mpsc::channel::<(u64, FxHashMap<String, u64>)>();
+    let (tx, rx) = mpsc::channel::<SizePart>();
     let root_owned = root.to_path_buf();
 
     WalkBuilder::new(root)
@@ -417,6 +608,7 @@ pub fn measure_size_walk(root: &Path, limit: Option<usize>) -> (u64, Vec<DirSize
             let mut acc = SizeAcc {
                 total: 0,
                 tops: FxHashMap::default(),
+                links: Vec::new(),
                 sink: tx.clone(),
             };
             let root = root_owned.clone();
@@ -435,19 +627,30 @@ pub fn measure_size_walk(root: &Path, limit: Option<usize>) -> (u64, Vec<DirSize
                     return WalkState::Continue;
                 };
                 let len = meta.len();
+                let key = ent
+                    .path()
+                    .strip_prefix(&root)
+                    .ok()
+                    .and_then(|rel| rel.components().next())
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .filter(|k| !skip_name(k));
+
                 acc.total = acc.total.saturating_add(len);
-                if let Ok(rel) = ent.path().strip_prefix(&root) {
-                    if let Some(comp) = rel.components().next() {
-                        let key = comp.as_os_str().to_string_lossy();
-                        if !skip_name(&key) {
-                            // Only allocate the key the first time we see it.
-                            match acc.tops.get_mut(key.as_ref()) {
-                                Some(v) => *v = v.saturating_add(len),
-                                None => {
-                                    acc.tops.insert(key.into_owned(), len);
-                                }
-                            }
+                if let Some(k) = key.as_deref() {
+                    // Only allocate the key the first time we see it.
+                    match acc.tops.get_mut(k) {
+                        Some(v) => *v = v.saturating_add(len),
+                        None => {
+                            acc.tops.insert(k.to_string(), len);
                         }
+                    }
+                }
+
+                // Record multiply-linked files so the post-pass can subtract the
+                // duplicates. Checking `nlink` first keeps the common case free.
+                if nlink_of(&meta) > 1 {
+                    if let Some((dev, ino)) = hardlink_id(&meta) {
+                        acc.links.push((dev, ino, len, key.unwrap_or_default()));
                     }
                 }
                 WalkState::Continue
@@ -457,11 +660,30 @@ pub fn measure_size_walk(root: &Path, limit: Option<usize>) -> (u64, Vec<DirSize
     drop(tx);
 
     let mut total = 0u64;
-    for (part_total, part) in rx {
+    let mut all_links: Vec<(u64, u64, u64, String)> = Vec::new();
+    for (part_total, part, links) in rx {
         total = total.saturating_add(part_total);
         for (k, v) in part {
             let e = tops.entry(k).or_default();
             *e = e.saturating_add(v);
+        }
+        all_links.extend(links);
+    }
+
+    // Single-threaded hardlink dedup, after the walk. Every link beyond the
+    // first for a given (device, inode) is subtracted from both the grand total
+    // and the top-level bucket it was attributed to, so `walk` agrees with
+    // `dust` instead of counting the same bytes once per link.
+    if !all_links.is_empty() {
+        let mut seen: FxHashSet<(u64, u64)> = FxHashSet::default();
+        for (dev, ino, len, key) in all_links {
+            if seen.insert((dev, ino)) {
+                continue; // first sighting already counted
+            }
+            total = total.saturating_sub(len);
+            if let Some(v) = tops.get_mut(&key) {
+                *v = v.saturating_sub(len);
+            }
         }
     }
 
@@ -569,7 +791,7 @@ pub fn parse_dust_output(raw: &str, root: &Path) -> Result<(u64, Vec<DirSize>)> 
     // dedupe names keep first (largest)
     let mut seen = std::collections::HashSet::new();
     tops.retain(|d| seen.insert(d.name.clone()));
-    tops.truncate(12);
+    tops.truncate(TOP_DIRS_LIMIT);
     if total == 0 && tops.is_empty() {
         bail!("dust produced no parseable rows");
     }
@@ -711,6 +933,7 @@ fn run_git(path: &Path) -> Result<Option<GitStats>> {
     // large history dominates the rest.
     let (p_branch, p_unstaged) = (path.to_path_buf(), path.to_path_buf());
     let (p_staged, p_log) = (path.to_path_buf(), path.to_path_buf());
+    let p_churn = path.to_path_buf();
 
     let h_branch = thread::spawn(move || {
         timed("branch", || {
@@ -725,27 +948,37 @@ fn run_git(path: &Path) -> Result<Option<GitStats>> {
     let h_unstaged = thread::spawn(move || timed("unstg", || git_diff_stat(&p_unstaged, false)));
     let h_staged = thread::spawn(move || timed("stged", || git_diff_stat(&p_staged, true)));
     let h_log = thread::spawn(move || timed("log", || recent_commits(&p_log, GIT_LOG_LIMIT)));
+    // Carried on the sample instead of being re-queried at report time. It used
+    // to run inside `Report::from_app`, i.e. on the TUI's render/input thread,
+    // where a locked index or a stale mount could freeze the UI for up to
+    // PROBE_TIMEOUT + GIT_TIMEOUT. Here it overlaps `git log -100`, so it costs
+    // ~nothing on the critical path and reuses the probe above.
+    let h_churn =
+        thread::spawn(move || timed("churn", || commit_churn_unchecked(&p_churn, CHURN_WINDOW)));
 
     let branch = h_branch.join().unwrap_or_else(|_| "HEAD".into());
     let (u_ins, u_del) = h_unstaged.join().unwrap_or((0, 0));
     let (s_ins, s_del) = h_staged.join().unwrap_or((0, 0));
     let commits = h_log.join().unwrap_or_default();
+    let churn = h_churn.join().unwrap_or_default();
 
     Ok(Some(GitStats {
         branch,
         ins: u_ins + s_ins,
         del: u_del + s_del,
         commits,
+        churn,
     }))
 }
 
 /// Unstaged (`cached=false`) or staged (`cached=true`) insert/delete counts.
 fn git_diff_stat(path: &Path, cached: bool) -> (u64, u64) {
-    let mut args: Vec<&str> = vec!["diff", "--numstat"];
-    if cached {
-        args = vec!["diff", "--cached", "--numstat"];
-    }
-    if let Ok(raw) = git_out(path, &args) {
+    let args: &[&str] = if cached {
+        &["diff", "--cached", "--numstat"]
+    } else {
+        &["diff", "--numstat"]
+    };
+    if let Ok(raw) = git_out(path, args) {
         let (ins, del, _) = numstat_sum(&raw);
         return (ins, del);
     }
@@ -788,18 +1021,20 @@ pub struct CommitChurn {
     pub deletions: u64,
 }
 
+/// Widest window any report asks for. `run_git` collects this much churn once,
+/// so every narrower window is answered by filtering in memory.
+pub const CHURN_WINDOW: Duration = Duration::from_secs(24 * 3600);
+
 /// Commits since `max_age` ago with insertions/deletions (newest first).
-/// Used to fill `deltas[].insertions` / `deltas[].deletions` with one git call.
-pub fn git_commit_churn_since(path: &Path, max_age: Duration) -> Vec<CommitChurn> {
-    if !git_ok(path) {
-        return Vec::new();
-    }
+/// Fills `deltas[].insertions` / `deltas[].deletions` with one git call.
+///
+/// No `git_ok` probe: the only caller is [`run_git`], which has already run one.
+fn commit_churn_unchecked(path: &Path, max_age: Duration) -> Vec<CommitChurn> {
     let since = format!("--since={} seconds ago", max_age.as_secs().max(1));
     // RS + unix timestamp, then optional shortstat line(s).
     let pretty = "--pretty=format:%x1e%ct";
-    let raw = match git_out(path, &["log", &since, pretty, "--shortstat"]) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
+    let Ok(raw) = git_out(path, &["log", &since, pretty, "--shortstat"]) else {
+        return Vec::new();
     };
     parse_commit_churn_stream(&raw)
 }
@@ -943,6 +1178,95 @@ mod tests {
         assert!(bytes < 1000, "ignored node_modules weight: {bytes}");
         assert!(tops.iter().any(|d| d.name == "a.rs"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A hardlinked file occupies its bytes once on disk, so the walk must not
+    /// bill them once per link. `dust` deduplicates; the walk used to disagree.
+    #[cfg(unix)]
+    #[test]
+    fn size_walk_dedups_hardlinks() {
+        let dir = std::env::temp_dir().join(format!("heim-hardlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("a")).unwrap();
+        fs::create_dir_all(dir.join("b")).unwrap();
+
+        let payload = "x".repeat(50_000);
+        let original = dir.join("a/data.bin");
+        fs::write(&original, &payload).unwrap();
+
+        let (before, _) = measure_size_walk(&dir, None);
+
+        // Same inode, second name, in a different top-level bucket.
+        fs::hard_link(&original, dir.join("b/data-link.bin")).unwrap();
+
+        let (after, tops) = measure_size_walk(&dir, None);
+        assert_eq!(
+            before, after,
+            "hardlinking existing bytes must not grow the reported total"
+        );
+
+        // The duplicate is subtracted from whichever bucket it landed in, so the
+        // buckets still sum to the total.
+        let summed: u64 = tops.iter().map(|d| d.bytes).sum();
+        assert_eq!(summed, after, "top-level buckets must sum to the total");
+
+        // A genuinely new file still counts.
+        fs::write(dir.join("b/other.bin"), "y".repeat(1_000)).unwrap();
+        let (grown, _) = measure_size_walk(&dir, None);
+        assert_eq!(grown, after + 1_000);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_children_code_ranks_by_loc() {
+        // Unique dir — parallel tests share process id, so tempfile_dir races.
+        let dir = std::env::temp_dir().join(format!(
+            "heim-loc-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src")).expect("mkdir src");
+        fs::create_dir_all(dir.join("tiny")).expect("mkdir tiny");
+        // Several code lines in src/, one in tiny/
+        fs::write(
+            dir.join("src/lib.rs"),
+            "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n",
+        )
+        .expect("write src");
+        fs::write(dir.join("tiny/x.rs"), "fn z() {}\n").expect("write tiny");
+        fs::write(dir.join("readme.txt"), "not counted as rust\n".repeat(20)).expect("write txt");
+
+        let (total, tops) = list_children_code(&dir);
+        assert!(total > 0, "expected some code lines, tops={tops:?}");
+        assert!(
+            tops.iter().any(|d| d.name == "src" && d.bytes > 0),
+            "src should have code: {tops:?}"
+        );
+        let src = tops.iter().find(|d| d.name == "src").unwrap().bytes;
+        let tiny = tops
+            .iter()
+            .find(|d| d.name == "tiny")
+            .map(|d| d.bytes)
+            .unwrap_or(0);
+        assert!(src >= tiny, "src LOC {src} should rank above tiny {tiny}");
+        // Drill into src — child file appears.
+        let (sub_total, sub) = list_children_code(&dir.join("src"));
+        assert_eq!(sub_total, src);
+        assert!(sub.iter().any(|d| d.name == "lib.rs" && d.bytes > 0));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn weight_mode_toggles() {
+        assert_eq!(WeightMode::Size.toggle(), WeightMode::Code);
+        assert_eq!(WeightMode::Code.toggle(), WeightMode::Size);
+        assert_eq!(WeightMode::Code.column(), "code");
+        assert_eq!(WeightMode::Size.label(), "size");
     }
 
     /// dust's `-X` matches whole paths, not names, so heim's old

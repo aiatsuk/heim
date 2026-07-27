@@ -71,5 +71,12 @@ jobs:
 
           git commit -m "chore(metrics): refresh README growth stats [skip ci]"
           # Rebase if another push landed; avoid force-push on main.
-          git pull --rebase origin main || true
-          git push origin HEAD:main
+          # `|| true` here used to swallow a *conflicted* rebase and then push
+          # anyway, from a half-rebased tree with conflict markers. Bail out
+          # instead — metrics refresh on a schedule, so skipping one run is free.
+          if ! git pull --rebase origin main; then
+            git rebase --abort || true
+            echo "::warning::metrics rebase conflicted; skipping this push"
+            exit 0
+          fi
+          git push origin HEAD:refs/heads/main

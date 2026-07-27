@@ -16,6 +16,11 @@ categories = ["command-line-utilities", "development-tools"]
 exclude = [
     "target/*",
     ".heim/*",
+    "docs/*",
+    "dist/*",
+    "scripts/*",
+    "skills/*",
+    ".github/*",
 ]
 
 # Binary stays `heim` (crate is `heim-monitor` — crates.io name `heim` is taken).
@@ -44,6 +49,29 @@ tokei = { version = "13", default-features = false }
 pkg-url = "{ repo }/releases/download/v{ version }/heim-{ version }-{ target }{ archive-suffix }"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
+
+# Lint policy lives here, not only in a CI flag, so local `cargo clippy` and
+# rust-analyzer enforce the same rules. Every lint below sits at zero
+# diagnostics on the current tree.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+# Nursery lint: keep at warn so a clippy version bump cannot turn main red.
+redundant_clone = "warn"
+uninlined_format_args = "deny"
+needless_continue = "deny"
+cloned_instead_of_copied = "deny"
+explicit_iter_loop = "deny"
+semicolon_if_nothing_returned = "deny"
+inefficient_to_string = "deny"
+manual_let_else = "deny"
+# Enforces clippy.toml's disallowed-methods: every subprocess must go through
+# `collect::run_timed` for its timeout and pipe draining.
+disallowed_methods = "deny"
 
 [profile.release]
 lto = true

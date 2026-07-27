@@ -1,0 +1,15 @@
+# heim must never block a collector thread on an unbounded subprocess.
+#
+# `collect::run_timed` is the only sanctioned entry point: it pipes both
+# streams, drains them on background threads — a bare `wait` deadlocks on
+# `git log --numstat` once output exceeds the ~64KiB pipe buffer — and kills
+# the child once its timeout expires.
+#
+# This invariant was previously only a comment, and two call sites had already
+# drifted from it (`git rev-parse` and `dust --version` both used bare
+# `.output()`, either of which could hang a sample forever on a stale mount).
+disallowed-methods = [
+  { path = "std::process::Command::output", reason = "unbounded blocking; use collect::run_timed" },
+  { path = "std::process::Command::status", reason = "unbounded blocking; use collect::run_timed" },
+  { path = "std::process::Command::spawn", reason = "use collect::run_timed (timeout + pipe draining)" },
+]

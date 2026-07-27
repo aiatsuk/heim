@@ -7,12 +7,13 @@
 //!   README          # short privacy note
 //!   sessions.jsonl  # session start/end events
 //!   samples.jsonl   # compact metric samples (append-only, rotated)
+//!   stats.json      # latest full report, refreshed on every sample
 //! ```
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -60,23 +61,39 @@ pub enum SessionEvent {
     },
 }
 
+/// Create `{project}/.heim/` and its privacy files without opening a session.
+///
+/// Callers that only need the directory to exist must use this instead of
+/// `Store::open`: a `Store` owns a session lifecycle, and dropping a throwaway
+/// one used to append a session `end` for a session that never started.
+pub fn ensure_dir(project: &Path) -> Result<PathBuf> {
+    let root = project.join(DIR_NAME);
+    fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
+    ensure_privacy_files(&root)?;
+    Ok(root)
+}
+
 #[derive(Debug)]
 pub struct Store {
     root: PathBuf,
     pub session_id: String,
     samples_written: u64,
+    /// `begin_session` wrote a `start` event.
+    began: bool,
+    /// `end_session` already wrote the matching `end` event.
+    ended: bool,
 }
 
 impl Store {
     pub fn open(project: &Path) -> Result<Self> {
-        let root = project.join(DIR_NAME);
-        fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
-        ensure_privacy_files(&root)?;
+        let root = ensure_dir(project)?;
         let session_id = new_session_id();
         Ok(Self {
             root,
             session_id,
             samples_written: 0,
+            began: false,
+            ended: false,
         })
     }
 
@@ -93,10 +110,22 @@ impl Store {
             path: project.display().to_string(),
         };
         append_jsonl(&self.root.join("sessions.jsonl"), &ev)?;
+        self.began = true;
         Ok(())
     }
 
+    /// Write the session `end` event. Idempotent, and a no-op for a store whose
+    /// session never began.
+    ///
+    /// Both guards are load-bearing: `Drop` also calls this, so without them an
+    /// explicit `end_session()` followed by the drop wrote the event twice, and
+    /// every `Store` opened just to create the directory wrote an orphan `end`.
+    /// The live store had accumulated 177 `end` events against 81 `start`s.
     pub fn end_session(&mut self) {
+        if !self.began || self.ended {
+            return;
+        }
+        self.ended = true;
         let ev = SessionEvent::End {
             id: self.session_id.clone(),
             ts: now_ts(),
@@ -152,11 +181,14 @@ impl Store {
         }
         let tmp = self.root.join("samples.jsonl.tmp");
         {
-            let mut f = File::create(&tmp)?;
+            // Buffered: `to_writer` on a bare File emits a syscall per JSON
+            // token, so compacting the 50k-row cap cost millions of them.
+            let mut f = std::io::BufWriter::new(File::create(&tmp)?);
             for r in &rows {
                 serde_json::to_writer(&mut f, r)?;
                 f.write_all(b"\n")?;
             }
+            let f = f.into_inner().map_err(|e| e.into_error())?;
             f.sync_all()?;
         }
         fs::rename(tmp, path)?;
@@ -247,14 +279,26 @@ fn ensure_privacy_files(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Append one JSON record plus newline as a **single** `write_all`.
+///
+/// `O_APPEND` makes an individual write atomic, not a token stream. Handing the
+/// raw `File` to `serde_json::to_writer` emitted ~66 syscalls per record, so two
+/// heim processes on one project interleaved mid-record and produced lines like
+/// `{"{ts""ts:"1784809746:,1784809746"…`. `load_recent` silently drops
+/// unparseable lines, so the history just quietly lost samples: a store driven by
+/// concurrent writers measured **15% of records corrupt**.
+///
+/// Concurrent writers are a documented workflow — the README tells agents to run
+/// `heim --once --json .` while the TUI is live.
 fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let mut f = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .with_context(|| format!("append {}", path.display()))?;
-    serde_json::to_writer(&mut f, value)?;
-    f.write_all(b"\n")?;
+    let mut buf = serde_json::to_vec(value)?;
+    buf.push(b'\n');
+    f.write_all(&buf)?;
     Ok(())
 }
 
@@ -274,7 +318,6 @@ fn ts_to_system(ts: u64) -> SystemTime {
 
 /// Map a wall time to Instant relative to now (clamped — never before process Instant origin).
 fn wall_to_instant(wall: SystemTime) -> Instant {
-    use std::time::Instant;
     let now_i = Instant::now();
     let now_w = SystemTime::now();
     match now_w.duration_since(wall) {
@@ -282,9 +325,6 @@ fn wall_to_instant(wall: SystemTime) -> Instant {
         Err(e) => now_i + e.duration(),
     }
 }
-
-// Instant used only in wall_to_instant
-use std::time::Instant;
 
 fn new_session_id() -> String {
     // compact sortable id: unix_secs-pid
@@ -296,6 +336,77 @@ mod tests {
     use super::*;
     use crate::collect::{DirSize, SizeEngine};
     use std::time::Instant;
+
+    fn count_events(dir: &Path) -> (usize, usize) {
+        let p = dir.join(DIR_NAME).join("sessions.jsonl");
+        let Ok(raw) = fs::read_to_string(&p) else {
+            return (0, 0);
+        };
+        let mut start = 0;
+        let mut end = 0;
+        for line in raw.lines().filter(|l| !l.trim().is_empty()) {
+            match serde_json::from_str::<SessionEvent>(line) {
+                Ok(SessionEvent::Start { .. }) => start += 1,
+                Ok(SessionEvent::End { .. }) => end += 1,
+                Err(_) => {}
+            }
+        }
+        (start, end)
+    }
+
+    /// Every `start` gets exactly one `end`, no matter how the store is closed.
+    ///
+    /// Regression: `end_session()` was not idempotent and `Drop` called it too,
+    /// and `write_store_stats` opened a throwaway `Store` on every sample whose
+    /// drop appended an orphan `end`. The real store had 177 ends to 81 starts.
+    #[test]
+    fn session_events_are_balanced() {
+        let dir = std::env::temp_dir().join(format!("heim-sessions-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // A store that begins, is ended explicitly, then also dropped.
+        {
+            let mut st = Store::open(&dir).unwrap();
+            st.begin_session(&dir, 10).unwrap();
+            st.end_session();
+            st.end_session(); // idempotent
+        } // Drop calls end_session again
+        assert_eq!(
+            count_events(&dir),
+            (1, 1),
+            "explicit end + drop double-wrote"
+        );
+
+        // Directory-only preparation must not touch the session log at all.
+        for _ in 0..5 {
+            ensure_dir(&dir).unwrap();
+        }
+        assert_eq!(
+            count_events(&dir),
+            (1, 1),
+            "ensure_dir wrote session events"
+        );
+
+        // A store that never begins must not write an `end` when dropped.
+        {
+            let _st = Store::open(&dir).unwrap();
+        }
+        assert_eq!(
+            count_events(&dir),
+            (1, 1),
+            "unbegun store wrote an orphan end"
+        );
+
+        // A second real session appends exactly one balanced pair.
+        {
+            let mut st = Store::open(&dir).unwrap();
+            st.begin_session(&dir, 10).unwrap();
+        } // ended by Drop only
+        assert_eq!(count_events(&dir), (2, 2));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn roundtrip_store() {

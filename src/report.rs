@@ -12,7 +12,7 @@ use serde::Serialize;
 use crate::app::{App, CODE_DELTA_WINDOWS};
 use crate::collect::{self, Sample, SizeBackendKind};
 use crate::fmt;
-use crate::store::{self, Store};
+use crate::store;
 
 /// Extra windows for agent reports (beyond the TUI strip).
 const AGENT_EXTRA_WINDOWS: &[(u64, &str)] = &[
@@ -185,10 +185,16 @@ impl Report {
                 .collect(),
         });
 
-        // One git log for the longest report window; bucket into each delta.
+        // Churn rides along on the sample — building a report must never shell
+        // out to git. It used to run `git_ok` + `git log --since=…` right here,
+        // and `apply_sample` calls this on the TUI's render/input thread.
         let max_window_secs = report_windows().map(|(s, _)| s).max().unwrap_or(0);
-        let churn =
-            collect::git_commit_churn_since(&app.path, Duration::from_secs(max_window_secs));
+        debug_assert!(
+            max_window_secs <= collect::CHURN_WINDOW.as_secs(),
+            "report window {max_window_secs}s exceeds collected churn window"
+        );
+        let churn: &[collect::CommitChurn] =
+            s.git.as_ref().map(|g| g.churn.as_slice()).unwrap_or(&[]);
         let now_unix = system_to_unix(SystemTime::now());
 
         let deltas: Vec<WindowDeltaReport> = report_windows()
@@ -200,7 +206,7 @@ impl Report {
                 } else {
                     (None, None)
                 };
-                let (insertions, deletions) = collect::sum_churn_in_window(&churn, secs, now_unix);
+                let (insertions, deletions) = collect::sum_churn_in_window(churn, secs, now_unix);
                 WindowDeltaReport {
                     window: label.to_string(),
                     window_secs: secs,
@@ -330,9 +336,11 @@ pub fn collect_report(path: &Path, size_pref: SizeBackendKind) -> Result<Report>
     // Records into `.heim/samples.jsonl` and writes `stats.json`.
     app.apply_sample(sample);
     let report = Report::from_app(&app);
+    // `end_session` is idempotent and `Drop` calls it too, so just let the
+    // store drop normally — the previous `mem::forget` existed only to suppress
+    // a duplicate `end` event that can no longer happen.
     if let Some(st) = app.store.as_mut() {
         st.end_session();
-        std::mem::forget(app.store.take());
     }
     Ok(report)
 }
@@ -342,10 +350,10 @@ pub fn store_stats_path(project: &Path) -> PathBuf {
 }
 
 pub fn write_store_stats(project: &Path, report: &Report) -> Result<()> {
-    let dir = project.join(store::DIR_NAME);
-    fs::create_dir_all(&dir)?;
-    // Ensure privacy files exist.
-    let _ = Store::open(project);
+    // Only the directory + privacy files are needed here. Opening a `Store`
+    // would start a session that nothing ever ends properly — this ran on every
+    // single sample and was the source of the orphaned `end` events.
+    store::ensure_dir(project)?;
     report.write_to(&store_stats_path(project))
 }
 

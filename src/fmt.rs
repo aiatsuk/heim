@@ -9,6 +9,13 @@ pub fn human_bytes_short(n: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
+    // Roll over when *rounding* would reach the next unit. Deciding the unit
+    // before rounding printed 1_048_575 bytes as "1024K" instead of "1.0M",
+    // since 1023.999 fails the `>= 1024.0` test but formats as "1024".
+    if v >= 1023.95 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
     if i == 0 {
         format!("{n}B")
     } else if v >= 10.0 {
@@ -157,6 +164,14 @@ mod tests {
         assert_eq!(human_bytes_short(500), "500B");
         assert_eq!(human_bytes_short(2048), "2.0K");
         assert_eq!(human_bytes_short(5 * 1024 * 1024), "5.0M");
+        // Unit boundaries: these used to render as "1024B", "1024K", "1024M".
+        assert_eq!(human_bytes_short(1023), "1023B");
+        assert_eq!(human_bytes_short(1024), "1.0K");
+        assert_eq!(human_bytes_short(1_048_575), "1.0M");
+        assert_eq!(human_bytes_short(1_048_576), "1.0M");
+        assert_eq!(human_bytes_short(1_073_741_823), "1.0G");
+        // The unit table tops out at T; no rollover past it, and no panic.
+        assert_eq!(human_bytes_short(u64::MAX), "16777216T");
     }
 
     #[test]

@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{opt_delta_bytes, opt_delta_i64, App, Focus};
+use crate::collect;
 use crate::fmt;
 use crate::theme::{self, Theme, BULLET_DIAMOND};
 
@@ -521,30 +522,39 @@ fn draw_lang_table(f: &mut Frame, area: Rect, app: &App, th: &Theme) -> usize {
     vis.max(1)
 }
 
+fn format_weight_metric(mode: collect::WeightMode, n: u64) -> String {
+    match mode {
+        collect::WeightMode::Size => fmt::human_bytes_short(n),
+        collect::WeightMode::Code => fmt::num(n),
+    }
+}
+
 fn draw_weight_table(f: &mut Frame, area: Rect, app: &App, th: &Theme, vis: usize) {
     let inner = area.inner(Margin {
         vertical: 1,
         horizontal: 1,
     });
-    let total = if app.weight_stack.is_empty() {
-        app.last
+    let mode = app.weight_mode;
+    let total = match mode {
+        collect::WeightMode::Size if app.weight_stack.is_empty() => app
+            .last
             .as_ref()
             .map(|s| s.size_bytes)
-            .unwrap_or(app.weight_total)
-    } else {
-        app.weight_total
+            .unwrap_or(app.weight_total),
+        _ => app.weight_total,
     };
     let engine = app.size_engine_label();
     let lay = layout_weight(inner.width, app.has_dir_deltas());
     let focused = app.focus == Focus::Weight;
     let children = &app.weight_children;
     let n = children.len();
+    let metric_col = mode.column();
 
     let mut header_cols: Vec<(&str, usize)> = vec![
         ("#", 2),
         ("", 1),
         ("path", lay.name_w),
-        ("size", 7),
+        (metric_col, 7),
         ("%", 4),
     ];
     if lay.show_delta {
@@ -558,9 +568,16 @@ fn draw_weight_table(f: &mut Frame, area: Rect, app: &App, th: &Theme, vis: usiz
                 format!(" {} ", theme::spinner_frame(app.tick.wrapping_add(2))),
                 Style::default().fg(th.accent_running),
             ),
-            Span::styled("loading…", th.dim()),
+            Span::styled(
+                match mode {
+                    collect::WeightMode::Code => "counting code…",
+                    collect::WeightMode::Size => "loading…",
+                },
+                th.dim(),
+            ),
         ]));
-    } else if app.last.is_none() && app.weight_stack.is_empty() {
+    } else if app.last.is_none() && app.weight_stack.is_empty() && mode == collect::WeightMode::Size
+    {
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" {} ", theme::spinner_frame(app.tick.wrapping_add(2))),
@@ -581,7 +598,7 @@ fn draw_weight_table(f: &mut Frame, area: Rect, app: &App, th: &Theme, vis: usiz
             let selected = focused && i == app.weight_sel;
             let is_dir = app.weight_cwd().join(&d.name).is_dir();
             let mark = if is_dir { theme::CHEVRON } else { " " };
-            let dlt = if app.weight_stack.is_empty() {
+            let dlt = if mode == collect::WeightMode::Size && app.weight_stack.is_empty() {
                 app.dir_delta_session(&d.name)
                     .or_else(|| app.dir_delta_interval(&d.name))
             } else {
@@ -607,7 +624,7 @@ fn draw_weight_table(f: &mut Frame, area: Rect, app: &App, th: &Theme, vis: usiz
                 ),
                 Span::raw(" "),
                 Span::styled(
-                    fmt::pad_left(&fmt::human_bytes_short(d.bytes), 7),
+                    fmt::pad_left(&format_weight_metric(mode, d.bytes), 7),
                     body_for(th, focused || selected),
                 ),
                 Span::raw(" "),
@@ -638,17 +655,20 @@ fn draw_weight_table(f: &mut Frame, area: Rect, app: &App, th: &Theme, vis: usiz
         String::new()
     };
     let crumb = app.weight_breadcrumb();
-    // Prefer path breadcrumb + size; engine is secondary
+    let total_label = format_weight_metric(mode, total);
+    let mode_tag = mode.label();
+    // Prefer path breadcrumb + total; mode + size-engine (size mode) secondary.
     let title = if app.weight_stack.is_empty() {
-        format!(
-            "weight · {} · {engine}{scroll}",
-            fmt::human_bytes_short(total)
-        )
+        match mode {
+            collect::WeightMode::Size => {
+                format!("weight · {mode_tag} · {total_label} · {engine}{scroll}")
+            }
+            collect::WeightMode::Code => {
+                format!("weight · {mode_tag} · {total_label} loc{scroll}")
+            }
+        }
     } else {
-        format!(
-            "weight · {crumb} · {}{scroll}",
-            fmt::human_bytes_short(total)
-        )
+        format!("weight · {mode_tag} · {crumb} · {total_label}{scroll}")
     };
     f.render_widget(
         Paragraph::new(lines).block(panel(th, &title, focused, app.weight_loading)),
@@ -836,6 +856,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App, th: &Theme) {
     }
     if w >= 95 {
         spans.extend([
+            Span::styled("  m", Style::default().fg(th.accent)),
+            Span::styled(" size/code", th.dim()),
             Span::styled("  drag", Style::default().fg(th.accent)),
             Span::styled(" resize", th.dim()),
             Span::styled("  enter", Style::default().fg(th.accent)),
@@ -856,17 +878,18 @@ fn draw_help(f: &mut Frame, area: Rect, th: &Theme) {
 heim — compact project monitor\n\
 \n\
   q / r / +/-     quit · refresh · interval\n\
+  m               weight metric: size (bytes) ↔ code (LOC)\n\
   Tab             focus languages → weight → git\n\
   j/k             move selection (keeps row in view)\n\
   mouse wheel     scroll the list viewport\n\
   click           focus + select\n\
   drag ┊ / git top  resize panels\n\
-  enter / dbl-click open weight dir\n\
+  enter / dbl-click open weight dir (size or code)\n\
   backspace / right-click  parent dir\n\
 \n\
 monitor  name · path · every Ns · age · live\n\
          totals once · Δ code over 5m/10m/30m/1h/2h\n\
-weight   path-first · numeric % · › folders · cache\n\
+weight   path-first · size or LOC · › folders · cache\n\
 git      auto-collapses when empty · height fits log";
     f.render_widget(
         Paragraph::new(text).style(th.bright()).block(
@@ -955,6 +978,7 @@ mod tests {
                 ins: 0,
                 del: 0,
                 commits: vec![],
+                churn: vec![],
             }),
             git_err: None,
             duration: Duration::from_millis(800),
@@ -962,7 +986,7 @@ mod tests {
     }
 
     fn render_at(w: u16, h: u16) -> String {
-        let mut app = App::new(PathBuf::from("/tmp/frontend"), 10, SizeBackendKind::Auto);
+        let mut app = App::without_store(PathBuf::from("/tmp/frontend"), 10, SizeBackendKind::Auto);
         app.apply_sample(sample_fixture());
         app.refreshing = false;
         let backend = TestBackend::new(w, h);
@@ -1023,123 +1047,6 @@ mod tests {
     }
 
     #[test]
-    fn bench_draw() {
-        if std::env::var("HEIM_BENCH").is_err() {
-            return;
-        }
-        let root = PathBuf::from(std::env::var("HEIM_BENCH_DIR").unwrap_or("/tmp".into()));
-        let mut app = App::new(root.clone(), 60, SizeBackendKind::Walk);
-        let mut s = sample_fixture();
-        // realistic: 20 weight children that exist on disk, 16 langs, 100 commits
-        let mut kids = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(&root) {
-            for e in rd.flatten().take(20) {
-                kids.push(DirSize {
-                    name: e.file_name().to_string_lossy().into_owned(),
-                    bytes: 1234,
-                });
-            }
-        }
-        s.top_dirs = kids;
-        if let Some(l) = s.loc.as_mut() {
-            l.langs = (0..16)
-                .map(|i| LangStat {
-                    name: format!("Lang{i}"),
-                    blank: 10,
-                    comment: 20,
-                    code: 1000 - i,
-                })
-                .collect();
-        }
-        if let Some(g) = s.git.as_mut() {
-            g.commits = (0..100)
-                .map(|i| crate::collect::GitCommit {
-                    short: format!("abc{i:04}"),
-                    subject: format!("feat: some reasonably long commit subject number {i}"),
-                    author: "developer".into(),
-                    ins: 12,
-                    del: 3,
-                })
-                .collect();
-            g.ins = 40;
-            g.del = 12;
-        }
-        app.apply_sample(s);
-        // history size from env
-        let hist: usize = std::env::var("HEIM_HIST")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
-        app.history.clear();
-        for i in 0..hist {
-            let mut h = sample_fixture();
-            h.wall = SystemTime::now() - Duration::from_secs((hist - i) as u64 * 10);
-            h.git = None;
-            h.top_dirs = vec![];
-            app.history.push_back(h);
-        }
-        app.refreshing = false;
-        let backend = TestBackend::new(120, 40);
-        let mut term = Terminal::new(backend).unwrap();
-        // warm
-        for _ in 0..5 {
-            term.draw(|f| {
-                let _ = draw(f, &mut app);
-            })
-            .unwrap();
-        }
-        let n = 200;
-        let t0 = Instant::now();
-        for _ in 0..n {
-            app.bump_tick();
-            term.draw(|f| {
-                let _ = draw(f, &mut app);
-            })
-            .unwrap();
-        }
-        let per = t0.elapsed() / n;
-        eprintln!("draw: {per:?}/frame  (hist={hist})");
-        use std::sync::atomic::Ordering::Relaxed;
-        let a0 = crate::ALLOCS.load(Relaxed);
-        let b0 = crate::BYTES.load(Relaxed);
-        for _ in 0..10 {
-            app.bump_tick();
-            term.draw(|f| {
-                let _ = draw(f, &mut app);
-            })
-            .unwrap();
-        }
-        eprintln!(
-            "allocs/frame: {}  bytes/frame: {}",
-            (crate::ALLOCS.load(Relaxed) - a0) / 10,
-            (crate::BYTES.load(Relaxed) - b0) / 10
-        );
-
-        // isolate: window deltas only
-        let t1 = Instant::now();
-        for _ in 0..n {
-            std::hint::black_box(app.code_window_deltas());
-        }
-        eprintln!(
-            "code_window_deltas: {:?}/call (hist={hist})",
-            t1.elapsed() / n
-        );
-
-        // isolate: is_dir stats for 20 rows
-        let t2 = Instant::now();
-        for _ in 0..n {
-            for d in &app.weight_children {
-                std::hint::black_box(app.weight_cwd().join(&d.name).is_dir());
-            }
-        }
-        eprintln!(
-            "is_dir x{} rows: {:?}/frame",
-            app.weight_children.len(),
-            t2.elapsed() / n
-        );
-    }
-
-    #[test]
     fn dump_layouts_for_qa() {
         if std::env::var("HEIM_DUMP").is_err() {
             return;
@@ -1149,7 +1056,7 @@ mod tests {
             print!("{}", render_at(w, h));
         }
         // With commits: git panel should expand
-        let mut app = App::new(PathBuf::from("/tmp/frontend"), 10, SizeBackendKind::Auto);
+        let mut app = App::without_store(PathBuf::from("/tmp/frontend"), 10, SizeBackendKind::Auto);
         let mut s = sample_fixture();
         if let Some(g) = s.git.as_mut() {
             g.commits = vec![

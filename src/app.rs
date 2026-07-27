@@ -1,10 +1,10 @@
 //! Application state: samples, history windows, deltas, optional `.heim` store.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::collect::{self, DirSize, LangStat, Sample, SizeBackendKind, SizeEngine};
+use crate::collect::{self, DirSize, LangStat, Sample, SizeBackendKind, SizeEngine, WeightMode};
 use crate::fmt;
 use crate::store::Store;
 
@@ -68,6 +68,9 @@ pub struct App {
     pub last_sample_at: Option<Instant>,
     /// Private project store (`.heim/`); None if open failed.
     pub store: Option<Store>,
+    /// Whether samples are written to disk at all (store + `stats.json`).
+    /// False for pure-render tests, which must not touch the filesystem.
+    pub persist: bool,
     /// Samples loaded from disk at session start (for status).
     pub loaded_from_store: usize,
     /// Frame counter for spinners / accent animation (paced for 120Hz UI).
@@ -88,8 +91,10 @@ pub struct App {
     pub weight_children: Vec<DirSize>,
     pub weight_total: u64,
     pub weight_loading: bool,
-    /// Cached weight listings for instant drill-down (path → total + children).
-    pub weight_cache: HashMap<PathBuf, (u64, Vec<DirSize>)>,
+    /// Size (bytes) vs code (LOC) for the weight panel + drill-down.
+    pub weight_mode: WeightMode,
+    /// Cached weight listings per path and metric mode.
+    pub weight_cache: HashMap<(PathBuf, WeightMode), (u64, Vec<DirSize>)>,
     /// Selected commit index in git panel (0 = newest).
     pub git_sel: usize,
     pub git_scroll: usize,
@@ -169,6 +174,7 @@ impl App {
             status,
             last_sample_at: None,
             store,
+            persist: true,
             loaded_from_store,
             tick: 0,
             dirty: true,
@@ -182,6 +188,56 @@ impl App {
             weight_children: Vec::new(),
             weight_total: 0,
             weight_loading: false,
+            weight_mode: WeightMode::Size,
+            weight_cache: HashMap::new(),
+            git_sel: 0,
+            git_scroll: 0,
+            lang_pct: 54,
+            git_h: 12,
+            drag: None,
+            hit: PanelHits::default(),
+        }
+    }
+
+    /// An app that never touches the filesystem: no `.heim/` store, no
+    /// `stats.json` write on `apply_sample`.
+    ///
+    /// For render tests. They used to build a real `App` on a hardcoded
+    /// `/tmp/frontend`, so running the suite opened a session and appended
+    /// samples to a store shared by every concurrent test process — that store
+    /// is where the 15% interleaved-write corruption was first measured.
+    #[cfg(test)]
+    pub fn without_store(path: PathBuf, interval_secs: u64, size_pref: SizeBackendKind) -> Self {
+        let path_label = collect::path_label(&path);
+        Self {
+            path,
+            path_label,
+            interval: Duration::from_secs(interval_secs.clamp(1, 300)),
+            size_pref,
+            baseline: None,
+            prev: None,
+            last: None,
+            history: VecDeque::new(),
+            refreshing: false,
+            help: false,
+            status: "collecting…".into(),
+            last_sample_at: None,
+            store: None,
+            persist: false,
+            loaded_from_store: 0,
+            tick: 0,
+            dirty: true,
+            last_anim: crate::theme::AnimFrame::default(),
+            focus: Focus::Lang,
+            lang_sel: 0,
+            lang_scroll: 0,
+            weight_sel: 0,
+            weight_scroll: 0,
+            weight_stack: Vec::new(),
+            weight_children: Vec::new(),
+            weight_total: 0,
+            weight_loading: false,
+            weight_mode: WeightMode::Size,
             weight_cache: HashMap::new(),
             git_sel: 0,
             git_scroll: 0,
@@ -249,9 +305,20 @@ impl App {
         }
     }
 
-    pub fn apply_weight_listing(&mut self, path: PathBuf, total: u64, children: Vec<DirSize>) {
+    pub fn apply_weight_listing(
+        &mut self,
+        path: PathBuf,
+        mode: WeightMode,
+        total: u64,
+        children: Vec<DirSize>,
+    ) {
         self.dirty = true;
-        self.weight_cache.insert(path, (total, children.clone()));
+        self.weight_cache
+            .insert((path, mode), (total, children.clone()));
+        // Only paint if this listing matches the mode the user is looking at.
+        if mode != self.weight_mode {
+            return;
+        }
         self.weight_total = total;
         self.weight_children = children;
         self.weight_loading = false;
@@ -264,8 +331,9 @@ impl App {
     }
 
     /// Apply listing from cache if present. Returns true if served from cache.
-    pub fn try_weight_from_cache(&mut self, path: &PathBuf) -> bool {
-        if let Some((total, children)) = self.weight_cache.get(path).cloned() {
+    pub fn try_weight_from_cache(&mut self, path: &Path) -> bool {
+        let key = (path.to_path_buf(), self.weight_mode);
+        if let Some((total, children)) = self.weight_cache.get(&key).cloned() {
             self.dirty = true;
             self.weight_total = total;
             self.weight_children = children;
@@ -278,48 +346,81 @@ impl App {
         }
     }
 
+    /// Toggle size ↔ code for the weight panel. Returns a path to fetch when
+    /// the listing is not cached for the new mode.
+    pub fn toggle_weight_mode(&mut self) -> Option<PathBuf> {
+        self.dirty = true;
+        self.weight_mode = self.weight_mode.toggle();
+        self.weight_sel = 0;
+        self.weight_scroll = 0;
+        let cwd = self.weight_cwd();
+        if self.try_weight_from_cache(&cwd) {
+            self.status = format!("weight · {}", self.weight_mode.label());
+            return None;
+        }
+        self.weight_loading = true;
+        self.weight_children.clear();
+        self.weight_total = 0;
+        self.status = format!("weight · {} · loading…", self.weight_mode.label());
+        Some(cwd)
+    }
+
     /// Keep selection inside the viewport after j/k (selection-driven).
-    pub fn ensure_sel_visible(&mut self, visible: usize) {
+    /// Clamp one list's selection and viewport to its own row budget.
+    fn clamp_view(n: usize, sel: &mut usize, scroll: &mut usize, visible: usize) {
+        if n == 0 {
+            *sel = 0;
+            *scroll = 0;
+            return;
+        }
         let vis = visible.max(1);
+        *sel = (*sel).min(n - 1);
+        if *sel < *scroll {
+            *scroll = *sel;
+        }
+        if *sel >= *scroll + vis {
+            *scroll = *sel + 1 - vis;
+        }
+        // Downward clamp. Without it a widening panel or a shrinking list left
+        // `scroll` stranded past the end and the head rows stayed hidden with
+        // no way to scroll back — the upward guards above never lower it.
+        *scroll = (*scroll).min(n.saturating_sub(vis));
+    }
+
+    /// Keep each selection inside its own viewport.
+    ///
+    /// Takes two budgets because the panels have different heights: languages
+    /// and weight share the ranks row, git has its own. Passing one budget for
+    /// all three meant focusing the short git panel rewrote `lang_scroll` and
+    /// `weight_scroll` with git's height — the top languages silently vanished,
+    /// the scroll hint is gated on `n > vis` so it did not even render, and the
+    /// clamp was one-directional so tabbing back never repaired it.
+    pub fn ensure_sel_visible(&mut self, list_vis: usize, git_vis: usize) {
         let nlang = self.langs().len();
-        if nlang > 0 {
-            self.lang_sel = self.lang_sel.min(nlang - 1);
-            if self.lang_sel < self.lang_scroll {
-                self.lang_scroll = self.lang_sel;
-            }
-            if self.lang_sel >= self.lang_scroll + vis {
-                self.lang_scroll = self.lang_sel + 1 - vis;
-            }
-        }
+        let (mut lang_sel, mut lang_scroll) = (self.lang_sel, self.lang_scroll);
+        Self::clamp_view(nlang, &mut lang_sel, &mut lang_scroll, list_vis);
+        self.lang_sel = lang_sel;
+        self.lang_scroll = lang_scroll;
+
         let nw = self.weight_children.len();
-        if nw > 0 {
-            self.weight_sel = self.weight_sel.min(nw - 1);
-            if self.weight_sel < self.weight_scroll {
-                self.weight_scroll = self.weight_sel;
-            }
-            if self.weight_sel >= self.weight_scroll + vis {
-                self.weight_scroll = self.weight_sel + 1 - vis;
-            }
-        }
+        let (mut w_sel, mut w_scroll) = (self.weight_sel, self.weight_scroll);
+        Self::clamp_view(nw, &mut w_sel, &mut w_scroll, list_vis);
+        self.weight_sel = w_sel;
+        self.weight_scroll = w_scroll;
+
         let ng = self
             .last
             .as_ref()
             .and_then(|s| s.git.as_ref())
             .map(|g| g.commits.len())
             .unwrap_or(0);
-        // git panel uses its own visible height — approximate with vis
-        if ng > 0 {
-            self.git_sel = self.git_sel.min(ng - 1);
-            if self.git_sel < self.git_scroll {
-                self.git_scroll = self.git_sel;
-            }
-            if self.git_sel >= self.git_scroll + vis {
-                self.git_scroll = self.git_sel + 1 - vis;
-            }
-        }
+        let (mut g_sel, mut g_scroll) = (self.git_sel, self.git_scroll);
+        Self::clamp_view(ng, &mut g_sel, &mut g_scroll, git_vis);
+        self.git_sel = g_sel;
+        self.git_scroll = g_scroll;
     }
 
-    pub fn move_sel(&mut self, delta: i32, visible: usize) {
+    pub fn move_sel(&mut self, delta: i32, list_vis: usize, git_vis: usize) {
         match self.focus {
             Focus::Lang => {
                 let n = self.langs().len();
@@ -351,7 +452,7 @@ impl App {
                 self.git_sel = cur.clamp(0, n as i32 - 1) as usize;
             }
         }
-        self.ensure_sel_visible(visible);
+        self.ensure_sel_visible(list_vis, git_vis);
     }
 
     pub fn clamp_layout(&mut self, term_h: u16) {
@@ -396,8 +497,12 @@ impl App {
         })
     }
 
-    /// Dir deltas only make sense at weight root (session/interval vs top_dirs).
+    /// Dir deltas only make sense at weight root in **size** mode
+    /// (session/interval vs sample `top_dirs` bytes).
     pub fn has_dir_deltas(&self) -> bool {
+        if self.weight_mode != WeightMode::Size {
+            return false;
+        }
         if !self.weight_stack.is_empty() {
             return false;
         }
@@ -545,12 +650,17 @@ impl App {
                 let _ = e;
             }
         }
-        // Root weight listing follows full samples only when not drilled in.
+        // Root size listing follows full samples when not drilled in.
+        // Code mode is refreshed separately (async tokei per-child listing).
         if self.weight_stack.is_empty() {
-            self.weight_children = s.top_dirs.clone();
-            self.weight_total = s.size_bytes;
-            self.weight_cache
-                .insert(self.path.clone(), (s.size_bytes, s.top_dirs.clone()));
+            self.weight_cache.insert(
+                (self.path.clone(), WeightMode::Size),
+                (s.size_bytes, s.top_dirs.clone()),
+            );
+            if self.weight_mode == WeightMode::Size {
+                self.weight_children = s.top_dirs.clone();
+                self.weight_total = s.size_bytes;
+            }
         }
         if let Some(g) = &s.git {
             if self.git_sel >= g.commits.len() && !g.commits.is_empty() {
@@ -559,22 +669,32 @@ impl App {
         }
         self.last_sample_at = Some(s.at);
         self.last = Some(s.clone());
-        self.history.push_back(s);
+
+        // History is read only for `wall`, `loc.code` and `size_bytes`
+        // (`window_pair`, `report::history_meta`). Retaining whole samples kept
+        // up to `GIT_LOG_LIMIT` commits, the churn vector, `top_dirs` and the
+        // per-language breakdown alive for all 10k retained entries — ~17.8 KB
+        // each. This mirrors `store::StoredSample::to_sample`, so live and
+        // disk-loaded rows stay interchangeable.
+        //
+        // Assignment, not `.clear()`: clearing retains the Vec's capacity, which
+        // is most of the footprint.
+        let mut slim = s;
+        slim.top_dirs = Vec::new();
+        slim.git = None;
+        slim.git_err = None;
+        if let Some(l) = slim.loc.as_mut() {
+            l.langs = Vec::new();
+        }
+        self.history.push_back(slim);
         while self.history.len() > HISTORY_CAP {
             self.history.pop_front();
         }
         self.refreshing = false;
         // Keep a machine-readable snapshot for agents (`heim --once --json` / `.heim/stats.json`).
-        let __t = std::time::Instant::now();
-        let report = crate::report::Report::from_app(self);
-        let __t2 = std::time::Instant::now();
-        let _ = crate::report::write_store_stats(&self.path, &report);
-        if std::env::var_os("HEIM_TRACE").is_some() {
-            eprintln!(
-                "heim[trace] apply_sample: from_app={:.2?} write_stats={:.2?}",
-                __t2 - __t,
-                __t2.elapsed()
-            );
+        if self.persist {
+            let report = crate::report::Report::from_app(self);
+            let _ = crate::report::write_store_stats(&self.path, &report);
         }
     }
 
@@ -636,13 +756,7 @@ impl App {
 
     /// Enough wall-clock history to evaluate this window.
     pub fn window_ready(&self, window: Duration) -> bool {
-        let Some(oldest) = self.history.front() else {
-            return false;
-        };
-        let Ok(span) = SystemTime::now().duration_since(oldest.wall) else {
-            return false;
-        };
-        span >= window && self.last.is_some()
+        self.window_pair(window).is_some()
     }
 
     /// Code-line delta vs oldest sample still within `window` (wall clock, cross-session).
@@ -661,16 +775,34 @@ impl App {
     }
 
     /// Current sample + oldest sample still inside the wall-clock window.
+    /// Current sample + the baseline it should be compared against, or `None`
+    /// when this window cannot be answered honestly.
+    ///
+    /// Two independent guards, both load-bearing:
+    ///
+    /// 1. History must actually **span** the window, otherwise a "2h" delta gets
+    ///    measured over whatever shorter slice happens to exist and over-claims.
+    /// 2. The baseline must **predate** the current sample. After heim has been
+    ///    off for a while, the only sample inside the window is the one just
+    ///    taken, and `cur - cur == 0` is indistinguishable from "nothing was
+    ///    written" — the single most misleading answer heim can give an agent
+    ///    that is asking precisely that question.
     fn window_pair(&self, window: Duration) -> Option<(&Sample, &Sample)> {
         let cur = self.last.as_ref()?;
-        if !self.window_ready(window) {
+        let now = SystemTime::now();
+
+        let oldest = self.history.front()?;
+        if now.duration_since(oldest.wall).unwrap_or(Duration::ZERO) < window {
             return None;
         }
-        let now = SystemTime::now();
+
         let old = self
             .history
             .iter()
             .find(|s| now.duration_since(s.wall).unwrap_or(Duration::MAX) <= window)?;
+        if old.wall >= cur.wall {
+            return None;
+        }
         Some((cur, old))
     }
 
@@ -760,6 +892,63 @@ mod tests {
         }
     }
 
+    /// Focusing the short git panel must not rewrite the language viewport.
+    ///
+    /// Regression: one row budget was applied to all three lists, so tabbing to
+    /// git (≈4 rows) scrolled the 24-row languages panel as if it were 4 rows
+    /// tall. The top languages vanished, the `x-y/n` hint is gated on `n > vis`
+    /// so it did not render, and the clamp was upward-only so tabbing back never
+    /// restored them.
+    #[test]
+    fn focusing_git_does_not_scroll_the_language_panel() {
+        let dir = std::env::temp_dir().join(format!("heim-budget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = App::new(dir.clone(), 10, SizeBackendKind::Walk);
+
+        let mut s = sample(100, 1000, Duration::ZERO);
+        if let Some(loc) = s.loc.as_mut() {
+            loc.langs = (0..16)
+                .map(|i| LangStat {
+                    name: format!("lang{i}"),
+                    blank: 0,
+                    comment: 0,
+                    code: 100 - i,
+                })
+                .collect();
+        }
+        s.git = Some(crate::collect::GitStats {
+            branch: "main".into(),
+            ins: 0,
+            del: 0,
+            commits: vec![crate::collect::GitCommit::default(); 20],
+            churn: vec![],
+        });
+        app.last = Some(s);
+
+        // Wide languages panel (24 rows), short git panel (4 rows).
+        app.lang_sel = 10;
+        app.lang_scroll = 0;
+        app.ensure_sel_visible(24, 4);
+        assert_eq!(
+            app.lang_scroll, 0,
+            "git's 4-row budget must not scroll a 24-row language panel"
+        );
+
+        // Git's own selection still gets clamped to git's budget.
+        app.git_sel = 19;
+        app.ensure_sel_visible(24, 4);
+        assert_eq!(app.git_scroll, 16, "git list must scroll within its 4 rows");
+
+        // Downward clamp: a panel that grows re-reveals the head rows.
+        app.lang_sel = 0;
+        app.lang_scroll = 12;
+        app.ensure_sel_visible(24, 4);
+        assert_eq!(app.lang_scroll, 0, "widened panel must not strand scroll");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `effective_git_h` used to build an inverted `clamp(5, max_git)` range and
     /// panic outright whenever the terminal was shorter than 15 rows.
     #[test]
@@ -775,6 +964,7 @@ mod tests {
             ins: 0,
             del: 0,
             commits: vec![crate::collect::GitCommit::default(); 4],
+            churn: vec![],
         });
         app.last = Some(s);
 
@@ -783,6 +973,43 @@ mod tests {
             let h = app.effective_git_h(term_h);
             assert!(h >= 3, "term_h={term_h} gave git_h={h}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A gap in history must read as "no data", never as "no growth".
+    ///
+    /// Regression: `window_ready` only compared the total span from the oldest
+    /// sample, so after heim had been off for days a fresh start reported
+    /// `ready = true` with `code = 0` for every window — the baseline the search
+    /// found was the current sample itself, and `cur - cur` is 0. An agent
+    /// asking "how many lines landed in the last 2h" was told "none".
+    #[test]
+    fn stale_history_is_not_ready_and_reports_no_delta() {
+        let dir = std::env::temp_dir().join(format!("heim-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = App::new(dir.clone(), 10, SizeBackendKind::Walk);
+        app.history.clear();
+        // heim was off for days: the only sample inside the 2h window is the
+        // one just taken, so there is no baseline to measure against.
+        let old = sample(1000, 10_000, Duration::from_secs(5 * 24 * 3600));
+        let mut cur = sample(1000, 10_000, Duration::ZERO);
+        cur.wall = SystemTime::now();
+
+        app.history.push_back(old);
+        app.history.push_back(cur.clone());
+        app.last = Some(cur);
+
+        let two_h = Duration::from_secs(2 * 3600);
+        assert_eq!(
+            app.window_code_delta(two_h),
+            None,
+            "a gap in history must read as no data, not as zero growth"
+        );
+        assert!(
+            !app.window_ready(two_h),
+            "a window whose only in-range sample is `cur` is not ready"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

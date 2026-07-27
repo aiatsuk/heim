@@ -29,7 +29,7 @@ use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 use app::{App, Drag, Focus};
-use collect::{DirSize, Sample, SizeBackendKind};
+use collect::{DirSize, Sample, SizeBackendKind, WeightMode};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -74,13 +74,16 @@ fn parse_size_backend(s: &str) -> std::result::Result<SizeBackendKind, String> {
 
 enum Job {
     Full,
-    WeightList(PathBuf),
+    WeightList { path: PathBuf, mode: WeightMode },
 }
 
 enum Msg {
-    Sample(Sample),
+    /// Boxed: a `Sample` dwarfs the other variant, and every message queued in
+    /// the channel would otherwise be padded to its size.
+    Sample(Box<Sample>),
     Weight {
         path: PathBuf,
+        mode: WeightMode,
         total: u64,
         children: Vec<DirSize>,
     },
@@ -98,24 +101,44 @@ impl Worker {
     ) -> (Self, thread::JoinHandle<()>) {
         let (tx_job, rx_job) = mpsc::channel::<Job>();
         let handle = thread::spawn(move || {
-            while let Ok(job) = rx_job.recv() {
-                let mut job = job;
-                while let Ok(next) = rx_job.try_recv() {
-                    job = next;
+            while let Ok(first) = rx_job.recv() {
+                // Coalesce PER KIND, never across kinds. Keeping only the newest
+                // job of any kind silently drops the other one, and each kind
+                // owns a latch the UI never clears on its own:
+                //   * a dropped `Full` leaves `refreshing = true`, and `due()`
+                //     returns false while refreshing — auto-refresh is dead for
+                //     the rest of the session.
+                //   * a dropped `WeightList` leaves `weight_loading = true` and
+                //     the drill-down never populates.
+                // Superseding a job with a newer one of the SAME kind is fine:
+                // the newer result subsumes it and clears the same latch.
+                let mut want_full = false;
+                let mut want_weight: Option<(PathBuf, WeightMode)> = None;
+                let mut job = first;
+                loop {
+                    match job {
+                        Job::Full => want_full = true,
+                        Job::WeightList { path, mode } => want_weight = Some((path, mode)),
+                    }
+                    match rx_job.try_recv() {
+                        Ok(next) => job = next,
+                        Err(_) => break,
+                    }
                 }
-                match job {
-                    Job::Full => {
-                        let s = collect::collect(&path, size_pref);
-                        let _ = sample_tx.send(Msg::Sample(s));
-                    }
-                    Job::WeightList(p) => {
-                        let (total, children) = collect::list_children_fast(&p);
-                        let _ = sample_tx.send(Msg::Weight {
-                            path: p,
-                            total,
-                            children,
-                        });
-                    }
+
+                // Weight first: it is the one a keypress is actively waiting on.
+                if let Some((p, mode)) = want_weight {
+                    let (total, children) = collect::list_children(&p, mode);
+                    let _ = sample_tx.send(Msg::Weight {
+                        path: p,
+                        mode,
+                        total,
+                        children,
+                    });
+                }
+                if want_full {
+                    let s = collect::collect(&path, size_pref);
+                    let _ = sample_tx.send(Msg::Sample(Box::new(s)));
                 }
             }
         });
@@ -126,31 +149,10 @@ impl Worker {
         let _ = self.tx_job.send(Job::Full);
     }
 
-    fn request_weight(&self, path: PathBuf) {
-        let _ = self.tx_job.send(Job::WeightList(path));
+    fn request_weight(&self, path: PathBuf, mode: WeightMode) {
+        let _ = self.tx_job.send(Job::WeightList { path, mode });
     }
 }
-
-pub struct CountingAlloc;
-pub static ALLOCS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
-    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
-        ALLOCS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        BYTES.fetch_add(l.size() as u64, std::sync::atomic::Ordering::Relaxed);
-        std::alloc::System.alloc(l)
-    }
-    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
-        std::alloc::System.dealloc(p, l)
-    }
-    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
-        ALLOCS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        BYTES.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
-        std::alloc::System.realloc(p, l, n)
-    }
-}
-#[global_allocator]
-static GA: CountingAlloc = CountingAlloc;
 
 fn main() {
     if let Err(e) = run() {
@@ -161,11 +163,15 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let path = cli
-        .path
-        .unwrap_or_else(|| std::env::current_dir().expect("cwd"))
-        .canonicalize()
-        .context("resolve path")?;
+    // Through the anyhow path, not `expect`: `main` exists to render
+    // `heim: {e:#}` and exit 1, and a deleted cwd is a user-facing error, not a
+    // panic banner with exit 101.
+    let path = match cli.path {
+        Some(p) => p,
+        None => std::env::current_dir().context("resolve current directory")?,
+    }
+    .canonicalize()
+    .context("resolve path")?;
     if !path.is_dir() {
         bail!("{} is not a directory", path.display());
     }
@@ -177,8 +183,11 @@ fn run() -> Result<()> {
             let text = report.to_json_pretty()?;
             match cli.output.as_deref() {
                 Some(p) if p.as_os_str() != "-" => {
+                    // No stdout copy: `--help` and docs/for-agents.md both
+                    // promise `-o FILE` writes to the file and `-` means
+                    // "stdout only". Printing here made the two identical and
+                    // handed agents that redirect stdout the report twice.
                     report.write_to(p)?;
-                    println!("{text}");
                     eprintln!("heim: wrote {}", p.display());
                     eprintln!(
                         "heim: also updated {}",
@@ -199,9 +208,8 @@ fn run() -> Result<()> {
             let s = collect::collect(&path, cli.size_backend);
             app.apply_sample(s.clone());
             print_once(&path, &s);
-            if let Some(mut st) = app.store.take() {
+            if let Some(st) = app.store.as_mut() {
                 st.end_session();
-                std::mem::forget(st);
             }
         }
         return Ok(());
@@ -211,11 +219,25 @@ fn run() -> Result<()> {
     let (sample_tx, sample_rx) = mpsc::channel();
     let (worker, _jh) = Worker::spawn(path, cli.size_backend, sample_tx);
 
+    // Must be installed before the alternate screen: a panic after this point
+    // would otherwise leave the user's shell in raw mode with mouse reporting
+    // on, echoing escape sequences, with the panic message itself unreadable.
+    install_panic_hook();
+
     enable_raw_mode()?;
     let mut out = stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
+    if let Err(e) = execute!(out, EnterAlternateScreen, EnableMouseCapture) {
+        restore_terminal();
+        return Err(e.into());
+    }
     let backend = CrosstermBackend::new(out);
-    let mut term = Terminal::new(backend)?;
+    let mut term = match Terminal::new(backend) {
+        Ok(t) => t,
+        Err(e) => {
+            restore_terminal();
+            return Err(e.into());
+        }
+    };
 
     app.refreshing = true;
     worker.request_full();
@@ -227,18 +249,44 @@ fn run() -> Result<()> {
     if let Some(st) = app.store.as_mut() {
         st.end_session();
     }
-    if let Some(st) = app.store.take() {
-        std::mem::forget(st);
-    }
 
-    disable_raw_mode()?;
-    execute!(
-        term.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    term.show_cursor()?;
+    // Unconditional and never short-circuits: the old `disable_raw_mode()?`
+    // chain meant one failing step skipped every step after it, leaving the
+    // terminal wedged. Restoring is best-effort by definition.
+    restore_terminal();
     res
+}
+
+/// Best-effort terminal restore. Idempotent, and safe to call from a panic hook.
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        crossterm::cursor::Show
+    );
+}
+
+/// Restore the terminal *before* the default hook prints, so the panic message
+/// lands on a usable screen instead of scrolling inside the alternate buffer.
+///
+/// **Gated to the thread that owns the terminal.** `set_hook` is process-global
+/// and fires on whichever thread panics, but [`collect::collect`] deliberately
+/// *recovers* from collector-thread panics via `join().unwrap_or_else(...)` —
+/// that is exactly why the release profile keeps `panic = "unwind"`. An
+/// ungated hook would leave the alternate screen and drop raw mode in the middle
+/// of a live session over a failure heim is designed to absorb silently, leaving
+/// the still-running UI painting over the user's shell scrollback.
+fn install_panic_hook() {
+    let ui_thread = thread::current().id();
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if thread::current().id() == ui_thread {
+            restore_terminal();
+        }
+        default(info);
+    }));
 }
 
 fn print_once(path: &std::path::Path, s: &Sample) {
@@ -307,14 +355,28 @@ fn event_loop(
 
         loop {
             match sample_rx.try_recv() {
-                Ok(Msg::Sample(s)) => app.apply_sample(s),
+                Ok(Msg::Sample(s)) => {
+                    app.apply_sample(*s);
+                    // After a full sample, refresh the code listing when the user
+                    // is browsing LOC so drill-down stays current.
+                    if app.weight_mode == WeightMode::Code {
+                        let cwd = app.weight_cwd();
+                        app.weight_cache.remove(&(cwd.clone(), WeightMode::Code));
+                        app.weight_loading = true;
+                        worker.request_weight(cwd, WeightMode::Code);
+                    }
+                }
                 Ok(Msg::Weight {
                     path,
+                    mode,
                     total,
                     children,
                 }) => {
                     if app.weight_cwd() == path {
-                        app.apply_weight_listing(path, total, children);
+                        app.apply_weight_listing(path, mode, total, children);
+                    } else if mode == app.weight_mode {
+                        // Stale path — still cache for later drill-down.
+                        app.weight_cache.insert((path, mode), (total, children));
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -335,11 +397,7 @@ fn event_loop(
         app.bump_tick();
         let size = term.size()?;
         app.clamp_layout(size.height);
-        let vis = match app.focus {
-            Focus::Git => git_vis,
-            _ => lang_vis,
-        };
-        app.ensure_sel_visible(vis);
+        app.ensure_sel_visible(lang_vis, git_vis);
 
         let anim = theme::anim_frame(app.tick);
         if app.dirty || anim != app.last_anim {
@@ -392,6 +450,12 @@ fn event_loop(
                         KeyCode::Char('+') | KeyCode::Char('=') => app.bump_interval(1),
                         KeyCode::Char('-') | KeyCode::Char('_') => app.bump_interval(-1),
                         KeyCode::Char('?') => app.help = !app.help,
+                        // Toggle weight panel: disk size ↔ code lines (with drill-down).
+                        KeyCode::Char('m') => {
+                            if let Some(p) = app.toggle_weight_mode() {
+                                worker.request_weight(p, app.weight_mode);
+                            }
+                        }
                         KeyCode::Esc if app.help => app.help = false,
                         KeyCode::Tab => {
                             app.focus = if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -401,19 +465,19 @@ fn event_loop(
                             };
                         }
                         KeyCode::BackTab => app.focus = app.focus.prev(),
-                        KeyCode::Down | KeyCode::Char('j') => app.move_sel(1, vis),
-                        KeyCode::Up | KeyCode::Char('k') => app.move_sel(-1, vis),
+                        KeyCode::Down | KeyCode::Char('j') => app.move_sel(1, lang_vis, git_vis),
+                        KeyCode::Up | KeyCode::Char('k') => app.move_sel(-1, lang_vis, git_vis),
                         KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => {
                             if app.focus == Focus::Weight {
                                 if let Some(p) = app.weight_enter() {
-                                    worker.request_weight(p);
+                                    worker.request_weight(p, app.weight_mode);
                                 }
                             }
                         }
                         KeyCode::Left | KeyCode::Backspace | KeyCode::Char('h') => {
                             if app.focus == Focus::Weight {
                                 if let Some(p) = app.weight_up() {
-                                    worker.request_weight(p);
+                                    worker.request_weight(p, app.weight_mode);
                                 }
                             }
                         }
@@ -456,7 +520,7 @@ fn event_loop(
                                     }
                                 }
                             }
-                            app.ensure_sel_visible(vis);
+                            app.ensure_sel_visible(lang_vis, git_vis);
                         }
                         _ => {}
                     }
@@ -503,7 +567,7 @@ fn event_loop(
                                 let n = app.langs().len();
                                 if n > 0 {
                                     app.lang_sel = idx.min(n - 1);
-                                    app.ensure_sel_visible(lang_v);
+                                    app.ensure_sel_visible(lang_v, git_v);
                                 }
                             } else if contains(app.hit.weight, col, row) {
                                 app.focus = Focus::Weight;
@@ -515,11 +579,11 @@ fn event_loop(
                                     let idx = idx.min(n - 1);
                                     if app.weight_sel == idx {
                                         if let Some(p) = app.weight_enter() {
-                                            worker.request_weight(p);
+                                            worker.request_weight(p, app.weight_mode);
                                         }
                                     } else {
                                         app.weight_sel = idx;
-                                        app.ensure_sel_visible(lang_v);
+                                        app.ensure_sel_visible(lang_v, git_v);
                                     }
                                 }
                             } else if contains(app.hit.git, col, row) {
@@ -534,7 +598,7 @@ fn event_loop(
                                     .unwrap_or(0);
                                 if n > 0 {
                                     app.git_sel = idx.min(n - 1);
-                                    app.ensure_sel_visible(git_v);
+                                    app.ensure_sel_visible(lang_v, git_v);
                                 }
                             }
                         }
@@ -587,7 +651,7 @@ fn event_loop(
                             if contains(app.hit.weight, col, row) {
                                 app.focus = Focus::Weight;
                                 if let Some(p) = app.weight_up() {
-                                    worker.request_weight(p);
+                                    worker.request_weight(p, app.weight_mode);
                                 }
                             }
                         }
@@ -596,7 +660,7 @@ fn event_loop(
                         {
                             app.focus = Focus::Weight;
                             if let Some(p) = app.weight_enter() {
-                                worker.request_weight(p);
+                                worker.request_weight(p, app.weight_mode);
                             }
                         }
                         _ => {}
