@@ -4,6 +4,13 @@
 [advisories]
 # Fail on a crate that has been pulled from the registry.
 yanked = "deny"
+# Only flag *unmaintained* crates we could actually act on. Security
+# vulnerabilities still fail the check everywhere — being unmaintained is not
+# one. `tokei` transitively pulls `paste` (RUSTSEC-2024-0436) and, under
+# `--all-features`, `term_size` (RUSTSEC-2020-0163); neither is heim's to fix,
+# and denying them would leave main red until an upstream we do not control
+# cuts a release.
+unmaintained = "workspace"
 
 [licenses]
 # Everything heim ships must be redistributable under these.
