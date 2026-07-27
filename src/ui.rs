@@ -89,7 +89,7 @@ pub fn draw(f: &mut Frame, app: &mut App) -> (usize, usize) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5), // monitor: title + 3 lines
+            Constraint::Length(6), // monitor: title + 4 lines (incl. host)
             Constraint::Min(4),    // ranks (main workspace)
             Constraint::Length(git_h),
             Constraint::Length(1), // footer
@@ -112,7 +112,7 @@ pub fn draw(f: &mut Frame, app: &mut App) -> (usize, usize) {
     draw_footer(f, root[3], app, &th);
 
     if app.help {
-        draw_help(f, centered(area, 72, 18), &th);
+        draw_help(f, centered(area, 72, 20), &th);
     }
     (lang_vis.max(1), git_vis.max(1))
 }
@@ -219,8 +219,11 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App, th: &Theme) {
         Line::from(spans)
     };
 
-    // Line 2: Δcode windows (5m…2h) + secondary insight chips.
-    let line2 = if app.last.is_none() {
+    // Line 2: host CPU / RAM / network rates.
+    let line2 = draw_host_line(app, th, inner_w);
+
+    // Line 3: Δcode windows (5m…2h) + secondary insight chips.
+    let line3 = if app.last.is_none() {
         Line::from(vec![
             Span::styled(format!("{BULLET_DIAMOND} "), Style::default().fg(th.accent)),
             Span::styled(
@@ -242,9 +245,75 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App, th: &Theme) {
         "monitor".into()
     };
     f.render_widget(
-        Paragraph::new(vec![line0, line1, line2]).block(panel(th, &title, false, app.refreshing)),
+        Paragraph::new(vec![line0, line1, line2, line3]).block(panel(
+            th,
+            &title,
+            false,
+            app.refreshing,
+        )),
         area,
     );
+}
+
+fn draw_host_line(app: &App, th: &Theme, inner_w: usize) -> Line<'static> {
+    match app.host_stats {
+        None => Line::from(vec![
+            dim_label(th, "CPU "),
+            Span::styled("—".to_string(), th.dim()),
+            dim_label(th, ", Memory "),
+            Span::styled("—".to_string(), th.dim()),
+            dim_label(th, ", Downlink: "),
+            Span::styled("—".to_string(), th.dim()),
+            dim_label(th, ", Uplink: "),
+            Span::styled("—".to_string(), th.dim()),
+            dim_label(th, ", Ping: "),
+            Span::styled("—".to_string(), th.dim()),
+            dim_label(th, ", GW: "),
+            Span::styled("—".to_string(), th.dim()),
+        ]),
+        Some(s) => {
+            // Prefer styled spans at full width; fall back to one truncated string.
+            let full_w_est = 112usize; // typical full line with ping + gw
+            if inner_w >= full_w_est.saturating_sub(8) {
+                let cpu = fmt::fmt_cpu(s.cpu_pct);
+                let mem = fmt::fmt_mem_pair(s.mem_used, s.mem_total);
+                let down = s.down_bps.map(fmt::fmt_mbps).unwrap_or_else(|| "—".into());
+                let up = s.up_bps.map(fmt::fmt_mbps).unwrap_or_else(|| "—".into());
+                let pending = app.ping_in_flight && s.ping_ms.is_none() && s.ping_gw_ms.is_none();
+                let ping = if pending {
+                    "…".into()
+                } else {
+                    s.ping_ms
+                        .map(fmt::fmt_ping_ms)
+                        .unwrap_or_else(|| "—".into())
+                };
+                let gw = if pending {
+                    "…".into()
+                } else {
+                    s.ping_gw_ms
+                        .map(fmt::fmt_ping_ms)
+                        .unwrap_or_else(|| "—".into())
+                };
+                Line::from(vec![
+                    dim_label(th, "CPU "),
+                    Span::styled(cpu, th.bright().add_modifier(Modifier::BOLD)),
+                    dim_label(th, ", Memory "),
+                    Span::styled(mem, th.bright().add_modifier(Modifier::BOLD)),
+                    dim_label(th, ", Downlink: "),
+                    Span::styled(down, th.body()),
+                    dim_label(th, ", Uplink: "),
+                    Span::styled(up, th.body()),
+                    dim_label(th, ", Ping: "),
+                    Span::styled(ping, th.body()),
+                    dim_label(th, ", GW: "),
+                    Span::styled(gw, th.body()),
+                ])
+            } else {
+                let text = crate::host::format_line_for_width(&s, inner_w);
+                Line::from(vec![Span::styled(text, th.body())])
+            }
+        }
+    }
 }
 
 /// Monitor insight: code-line window deltas first, then secondary chips.
@@ -854,7 +923,13 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App, th: &Theme) {
             Span::styled(" scroll", th.dim()),
         ]);
     }
-    if w >= 95 {
+    if w >= 88 {
+        spans.extend([
+            Span::styled("  n", Style::default().fg(th.accent)),
+            Span::styled(" net/ping", th.dim()),
+        ]);
+    }
+    if w >= 105 {
         spans.extend([
             Span::styled("  m", Style::default().fg(th.accent)),
             Span::styled(" size/code", th.dim()),
@@ -877,7 +952,8 @@ fn draw_help(f: &mut Frame, area: Rect, th: &Theme) {
     let text = "\
 heim — compact project monitor\n\
 \n\
-  q / r / +/-     quit · refresh · interval\n\
+  q / r / +/-     quit · refresh project · interval\n\
+  n               force network rates + multi-ping now\n\
   m               weight metric: size (bytes) ↔ code (LOC)\n\
   Tab             focus languages → weight → git\n\
   j/k             move selection (keeps row in view)\n\
@@ -888,7 +964,8 @@ heim — compact project monitor\n\
   backspace / right-click  parent dir\n\
 \n\
 monitor  name · path · every Ns · age · live\n\
-         totals once · Δ code over 5m/10m/30m/1h/2h\n\
+         totals · host (CPU/RAM/net 3s · ping 5m avg 1.1.1.1+8.8.8.8 + GW)\n\
+         Δ code over 5m/10m/30m/1h/2h\n\
 weight   path-first · size or LOC · › folders · cache\n\
 git      auto-collapses when empty · height fits log";
     f.render_widget(
@@ -989,6 +1066,16 @@ mod tests {
         let mut app = App::without_store(PathBuf::from("/tmp/frontend"), 10, SizeBackendKind::Auto);
         app.apply_sample(sample_fixture());
         app.refreshing = false;
+        // Fixed host stats so render tests are deterministic.
+        app.host_stats = Some(crate::host::HostStats {
+            cpu_pct: 42.6,
+            mem_used: 3_338_600_448,
+            mem_total: 4_294_967_296,
+            down_bps: Some(68.442e6),
+            up_bps: Some(75.497e6),
+            ping_ms: Some(14.2),
+            ping_gw_ms: Some(1.3),
+        });
         let backend = TestBackend::new(w, h);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| {
@@ -1004,6 +1091,18 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    #[test]
+    fn host_line_renders_at_wide_width() {
+        let s = render_at(120, 30);
+        assert!(
+            s.contains("CPU") && s.contains("Memory") && s.contains("Downlink"),
+            "expected host strip: {s}"
+        );
+        assert!(s.contains("42.6%") || s.contains("42.6"), "cpu: {s}");
+        assert!(s.contains("Ping") || s.contains("14.2"), "ping: {s}");
+        assert!(s.contains("GW") || s.contains("1.3"), "gw: {s}");
     }
 
     #[test]

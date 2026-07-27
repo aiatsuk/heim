@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Host resource strip** in the monitor panel: **CPU %** / **Memory** / **Downlink·Uplink** (every 3s; rates from interface counters, not a speedtest), and multi-target **Ping** every 5m (mean of anycast DNS `1.1.1.1` + `8.8.8.8`, plus separate default-**GW** RTT). Force net+ping with **`n`**. Compact form: `…, Ping: 14.2 ms, GW: 1.3 ms`. Also printed on `heim --once` (text mode)
 - **Weight panel metric toggle** (`m`): switch between disk **size** and **code** (LOC) per path, with the same drill-down into directories (tokei, parallel per-child)
 - **README growth metrics** (1d / 3d / 1w / 2w / 1mo / 2mo / 6mo / 1y): CI cron samples via `scripts/metrics_readme.py`, stores history in `docs/metrics/`, rewrites shields-style badges + table between `HEIM:METRICS` markers
 - README **top-7 languages** (code + % of LOC) from the same sample as the TUI languages panel

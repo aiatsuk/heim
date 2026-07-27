@@ -3,6 +3,7 @@
 mod app;
 mod collect;
 mod fmt;
+mod host;
 mod report;
 mod store;
 mod theme;
@@ -87,6 +88,8 @@ enum Msg {
         total: u64,
         children: Vec<DirSize>,
     },
+    /// Background multi-target ICMP ping finished.
+    HostPing(host::PingResult),
 }
 
 struct Worker {
@@ -217,7 +220,8 @@ fn run() -> Result<()> {
 
     let mut app = App::new(path.clone(), cli.interval, cli.size_backend);
     let (sample_tx, sample_rx) = mpsc::channel();
-    let (worker, _jh) = Worker::spawn(path, cli.size_backend, sample_tx);
+    // Clone: worker owns one end for samples/weights; UI keeps one for ping jobs.
+    let (worker, _jh) = Worker::spawn(path, cli.size_backend, sample_tx.clone());
 
     // Must be installed before the alternate screen: a panic after this point
     // would otherwise leave the user's shell in raw mode with mouse reporting
@@ -244,7 +248,7 @@ fn run() -> Result<()> {
 
     // 120Hz frame budget for smooth animation pacing.
     let frame = Duration::from_nanos(1_000_000_000 / theme::TARGET_FPS);
-    let res = event_loop(&mut term, &mut app, &worker, &sample_rx, frame);
+    let res = event_loop(&mut term, &mut app, &worker, &sample_rx, &sample_tx, frame);
 
     if let Some(st) = app.store.as_mut() {
         st.end_session();
@@ -331,6 +335,8 @@ fn print_once(path: &std::path::Path, s: &Sample) {
     } else if let Some(e) = &s.git_err {
         println!("git:    {e}");
     }
+    let host_stats = host::HostMonitor::sample_once();
+    println!("host:   {}", host::format_line(&host_stats));
     println!("took:   {:.2}s", s.duration.as_secs_f64());
 }
 
@@ -341,11 +347,21 @@ fn contains(r: Rect, col: u16, row: u16) -> bool {
         && row < r.y.saturating_add(r.height)
 }
 
+fn spawn_ping(tx: &Sender<Msg>) {
+    let tx = tx.clone();
+    thread::spawn(move || {
+        // 1.1.1.1 + 8.8.8.8 average + default gateway — sequential, off UI thread.
+        let r = host::measure_all_pings();
+        let _ = tx.send(Msg::HostPing(r));
+    });
+}
+
 fn event_loop(
     term: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     worker: &Worker,
     sample_rx: &Receiver<Msg>,
+    sample_tx: &Sender<Msg>,
     frame: Duration,
 ) -> Result<()> {
     let mut lang_vis = 8usize;
@@ -379,6 +395,11 @@ fn event_loop(
                         app.weight_cache.insert((path, mode), (total, children));
                     }
                 }
+                Ok(Msg::HostPing(r)) => {
+                    if app.apply_host_ping(r) {
+                        app.dirty = true;
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => bail!("collector stopped"),
             }
@@ -387,6 +408,18 @@ fn event_loop(
         if app.due() {
             app.refreshing = true;
             worker.request_full();
+        }
+
+        // Host metrics: independent cadences (CPU/RAM/net 3s, ping 5m).
+        if app.cpu_mem_due() && app.poll_host_cpu_mem() {
+            app.dirty = true;
+        }
+        if app.network_due() && app.poll_host_network() {
+            app.dirty = true;
+        }
+        if app.ping_due() {
+            app.mark_ping_started();
+            spawn_ping(sample_tx);
         }
 
         // The tick keeps advancing at 120Hz so animation pacing stays correct,
@@ -445,6 +478,16 @@ fn event_loop(
                             if !app.refreshing {
                                 app.refreshing = true;
                                 worker.request_full();
+                            }
+                        }
+                        // Force network rates + ICMP ping (bypass 3s / 5m schedules).
+                        KeyCode::Char('n') => {
+                            if app.poll_host_network() {
+                                app.dirty = true;
+                            }
+                            if !app.ping_in_flight {
+                                app.mark_ping_started();
+                                spawn_ping(sample_tx);
                             }
                         }
                         KeyCode::Char('+') | KeyCode::Char('=') => app.bump_interval(1),

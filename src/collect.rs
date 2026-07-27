@@ -264,7 +264,8 @@ pub fn collect(path: &Path, size_pref: SizeBackendKind) -> Sample {
 /// **Critical:** stdout/stderr are drained on background threads while waiting.
 /// Reading only after `try_wait` succeeds deadlocks when output exceeds the
 /// OS pipe buffer (~64KiB) — which is exactly what `git log --numstat` does.
-fn run_timed(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
+/// Shared timeout + pipe-draining subprocess runner (git, dust probe, ping, …).
+pub(crate) fn run_timed(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let tspawn = Instant::now();
     // The sanctioned spawn: this function *is* the timeout + pipe-draining

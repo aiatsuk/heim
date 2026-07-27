@@ -6,6 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::collect::{self, DirSize, LangStat, Sample, SizeBackendKind, SizeEngine, WeightMode};
 use crate::fmt;
+use crate::host::{self, HostMonitor, HostStats};
 use crate::store::Store;
 
 const HISTORY_CAP: usize = 10_000;
@@ -106,6 +107,18 @@ pub struct App {
     pub drag: Option<Drag>,
     /// Last drawn panel rects for mouse hit-testing.
     pub hit: PanelHits,
+    /// Live host CPU / RAM / network / ping sampler.
+    pub host: HostMonitor,
+    /// Latest host snapshot for the monitor strip.
+    pub host_stats: Option<HostStats>,
+    /// Last successful CPU/RAM poll.
+    pub last_cpu_poll: Option<Instant>,
+    /// Last network counter sample.
+    pub last_net_poll: Option<Instant>,
+    /// Last ping request start (auto or forced).
+    pub last_ping_poll: Option<Instant>,
+    /// True while a background ping is in flight (dedupe concurrent pings).
+    pub ping_in_flight: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -196,6 +209,12 @@ impl App {
             git_h: 12,
             drag: None,
             hit: PanelHits::default(),
+            host: HostMonitor::new(),
+            host_stats: None,
+            last_cpu_poll: None,
+            last_net_poll: None,
+            last_ping_poll: None,
+            ping_in_flight: false,
         }
     }
 
@@ -245,7 +264,74 @@ impl App {
             git_h: 12,
             drag: None,
             hit: PanelHits::default(),
+            host: HostMonitor::new(),
+            host_stats: None,
+            last_cpu_poll: None,
+            last_net_poll: None,
+            last_ping_poll: None,
+            ping_in_flight: false,
         }
+    }
+
+    fn commit_host(&mut self, next: HostStats) -> bool {
+        let changed = match self.host_stats {
+            None => true,
+            Some(prev) => fmt_host_key(&prev) != fmt_host_key(&next),
+        };
+        self.host_stats = Some(next);
+        changed
+    }
+
+    /// CPU + RAM (every [`host::CPU_MEM_INTERVAL`]).
+    pub fn poll_host_cpu_mem(&mut self) -> bool {
+        let next = self.host.poll_cpu_mem();
+        self.last_cpu_poll = Some(Instant::now());
+        self.commit_host(next)
+    }
+
+    /// Network rates (every [`host::NET_INTERVAL`], or on force).
+    pub fn poll_host_network(&mut self) -> bool {
+        let next = self.host.poll_network();
+        self.last_net_poll = Some(Instant::now());
+        self.commit_host(next)
+    }
+
+    /// Apply a background multi-target ping result.
+    pub fn apply_host_ping(&mut self, r: host::PingResult) -> bool {
+        self.ping_in_flight = false;
+        let next = self.host.apply_ping(r);
+        self.commit_host(next)
+    }
+
+    /// Whether an automatic ping is due (and none is already running).
+    pub fn ping_due(&self) -> bool {
+        if self.ping_in_flight {
+            return false;
+        }
+        match self.last_ping_poll {
+            None => true,
+            Some(t) => t.elapsed() >= host::PING_INTERVAL,
+        }
+    }
+
+    pub fn cpu_mem_due(&self) -> bool {
+        match self.last_cpu_poll {
+            None => true,
+            Some(t) => t.elapsed() >= host::CPU_MEM_INTERVAL,
+        }
+    }
+
+    pub fn network_due(&self) -> bool {
+        match self.last_net_poll {
+            None => true,
+            Some(t) => t.elapsed() >= host::NET_INTERVAL,
+        }
+    }
+
+    /// Mark a ping request as started (dedupe + schedule reset).
+    pub fn mark_ping_started(&mut self) {
+        self.ping_in_flight = true;
+        self.last_ping_poll = Some(Instant::now());
     }
 
     pub fn project_name(&self) -> String {
@@ -457,14 +543,14 @@ impl App {
 
     pub fn clamp_layout(&mut self, term_h: u16) {
         self.lang_pct = self.lang_pct.clamp(30, 70);
-        // Leave room for monitor(5)+ranks(min4)+footer(1); git may collapse to 3.
-        let max_git = term_h.saturating_sub(10).max(3);
+        // Leave room for monitor(6)+ranks(min4)+footer(1); git may collapse to 3.
+        let max_git = term_h.saturating_sub(11).max(3);
         self.git_h = self.git_h.clamp(3, max_git);
     }
 
     /// Preferred git panel height for this frame (auto-collapse when empty).
     pub fn effective_git_h(&self, term_h: u16) -> u16 {
-        let max_git = term_h.saturating_sub(10).max(3);
+        let max_git = term_h.saturating_sub(11).max(3);
         let preferred = self.git_h.clamp(3, max_git);
         let n = self
             .last
@@ -842,6 +928,11 @@ fn interval_named_delta(cur: Option<u64>, prev: Option<u64>) -> Option<i64> {
 
 fn nonzero_delta(v: Option<i64>) -> bool {
     matches!(v, Some(n) if n != 0)
+}
+
+/// Coarse key so host redraws track the formatted line, not raw float noise.
+fn fmt_host_key(s: &HostStats) -> String {
+    crate::host::format_line(s)
 }
 
 fn format_opt_delta(v: Option<i64>, signed: impl FnOnce(i64) -> String) -> String {

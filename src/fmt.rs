@@ -155,6 +155,45 @@ pub fn pad_right(s: &str, w: usize) -> String {
     }
 }
 
+/// CPU usage with one decimal: `42.6%`.
+pub fn fmt_cpu(pct: f32) -> String {
+    let p = pct.clamp(0.0, 100.0);
+    format!("{p:.1}%")
+}
+
+/// Used/total RAM pair: `3.11G/4G` (same unit scale as [`human_bytes_short`]).
+pub fn fmt_mem_pair(used: u64, total: u64) -> String {
+    format!("{}/{}", human_bytes_short(used), human_bytes_short(total))
+}
+
+/// Network rate from bits/s → `68.442 Mbps` (decimal megabits).
+pub fn fmt_mbps(bits_per_sec: f64) -> String {
+    let bps = bits_per_sec.max(0.0);
+    let mbps = bps / 1_000_000.0;
+    if mbps >= 100.0 {
+        format!("{mbps:.1} Mbps")
+    } else if mbps >= 0.01 {
+        format!("{mbps:.3} Mbps")
+    } else if bps >= 1000.0 {
+        // Sub-Mbps but non-trivial: show Kbps.
+        format!("{:.1} Kbps", bps / 1000.0)
+    } else {
+        format!("{bps:.0} bps")
+    }
+}
+
+/// ICMP RTT: `14.2 ms`.
+pub fn fmt_ping_ms(ms: f64) -> String {
+    let ms = ms.max(0.0);
+    if ms >= 100.0 {
+        format!("{ms:.0} ms")
+    } else if ms >= 10.0 {
+        format!("{ms:.1} ms")
+    } else {
+        format!("{ms:.2} ms")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +237,30 @@ mod tests {
         assert_eq!(hum_interval(45), "45s");
         assert_eq!(hum_interval(60), "1m");
         assert_eq!(hum_interval(150), "2m30s");
+    }
+
+    #[test]
+    fn host_formatters() {
+        assert_eq!(fmt_cpu(42.64), "42.6%");
+        assert_eq!(fmt_cpu(0.0), "0.0%");
+        assert_eq!(fmt_cpu(100.0), "100.0%");
+        assert_eq!(fmt_cpu(150.0), "100.0%");
+
+        // ~3.11 GiB / 4 GiB
+        let used = (3.11 * 1024.0 * 1024.0 * 1024.0) as u64;
+        let total = 4u64 * 1024 * 1024 * 1024;
+        let pair = fmt_mem_pair(used, total);
+        assert!(pair.contains('/'), "{pair}");
+        assert!(pair.ends_with('G') || pair.contains("G/"), "{pair}");
+
+        assert_eq!(fmt_mbps(68.442e6), "68.442 Mbps");
+        assert_eq!(fmt_mbps(75.497e6), "75.497 Mbps");
+        assert_eq!(fmt_mbps(0.0), "0 bps");
+        assert_eq!(fmt_mbps(500_000.0), "0.500 Mbps");
+        assert!(fmt_mbps(8_000.0).contains("Kbps"), "{}", fmt_mbps(8_000.0));
+
+        assert_eq!(fmt_ping_ms(14.2), "14.2 ms");
+        assert_eq!(fmt_ping_ms(0.43), "0.43 ms");
+        assert_eq!(fmt_ping_ms(150.0), "150 ms");
     }
 }
