@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **MSRV 1.88 CI**: pin `sysinfo` to **0.38** (`0.39` requires rustc 1.95)
+
 ### Added
 
 - **Host resource strip** in the monitor panel: **CPU %** / **Memory** / **Downlink·Uplink** (every 3s; rates from interface counters, not a speedtest), and multi-target **Ping** every 5m (mean of anycast DNS `1.1.1.1` + `8.8.8.8`, plus separate default-**GW** RTT). Force net+ping with **`n`**. In-memory **ping history**: 30m sparkline + **avg/max** over 5m / 10m / 30m. Also printed on `heim --once` (text mode)
