@@ -27,15 +27,15 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 
 ### Project growth (heim metrics)
 
-![code 7,120](https://img.shields.io/badge/code-7%2C120%20LOC-informational) ![Δ 1d](https://img.shields.io/badge/%CE%94%201d-%2B1%2C532-orange) ![Δ 3d](https://img.shields.io/badge/%CE%94%203d-%2B7%2C120-red) ![Δ 1w](https://img.shields.io/badge/%CE%94%201w-%2B7%2C120-red) ![Δ 2w](https://img.shields.io/badge/%CE%94%202w-%2B7%2C120-red) ![Δ 1mo](https://img.shields.io/badge/%CE%94%201mo-%2B7%2C120-red) ![Δ 2mo](https://img.shields.io/badge/%CE%94%202mo-%2B7%2C120-red) ![Δ 6mo](https://img.shields.io/badge/%CE%94%206mo-%2B7%2C120-red) ![Δ 1y](https://img.shields.io/badge/%CE%94%201y-%2B7%2C120-red)
+![code 7,120](https://img.shields.io/badge/code-7%2C120%20LOC-informational) ![Δ 1d](https://img.shields.io/badge/%CE%94%201d-0-lightgrey) ![Δ 3d](https://img.shields.io/badge/%CE%94%203d-%2B7%2C120-red) ![Δ 1w](https://img.shields.io/badge/%CE%94%201w-%2B7%2C120-red) ![Δ 2w](https://img.shields.io/badge/%CE%94%202w-%2B7%2C120-red) ![Δ 1mo](https://img.shields.io/badge/%CE%94%201mo-%2B7%2C120-red) ![Δ 2mo](https://img.shields.io/badge/%CE%94%202mo-%2B7%2C120-red) ![Δ 6mo](https://img.shields.io/badge/%CE%94%206mo-%2B7%2C120-red) ![Δ 1y](https://img.shields.io/badge/%CE%94%201y-%2B7%2C120-red)
 
 | Now | |
 |-----|--|
 | **code** | 7,120 LOC |
 | **files** | 30 |
 | **size** | 598K |
-| **updated** | 2026-07-28T07:13:46Z UTC |
-| **history** | 11 samples in [`docs/metrics/`](docs/metrics/) |
+| **updated** | 2026-07-29T07:15:31Z UTC |
+| **history** | 12 samples in [`docs/metrics/`](docs/metrics/) |
 
 #### Top 7 languages
 
@@ -55,14 +55,14 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 
 | Window | LOC Δ | Size Δ | Git +/− | Ready |
 |--------|------:|-------:|--------:|:-----:|
-| **1d** (today) | `+1,532` | `+81.7K` | `+2,989/−707` | yes |
-| **3d** (3 days) | `+7,120` | `+598.7K` | `+13,553/−1,370` | since birth |
-| **1w** (1 week) | `+7,120` | `+598.7K` | `+13,553/−1,370` | since birth |
-| **2w** (2 weeks) | `+7,120` | `+598.7K` | `+13,553/−1,370` | since birth |
-| **1mo** (1 month) | `+7,120` | `+598.7K` | `+13,553/−1,370` | since birth |
-| **2mo** (2 months) | `+7,120` | `+598.7K` | `+13,553/−1,370` | since birth |
-| **6mo** (6 months) | `+7,120` | `+598.7K` | `+13,553/−1,370` | since birth |
-| **1y** (1 year) | `+7,120` | `+598.7K` | `+13,553/−1,370` | since birth |
+| **1d** (today) | `0` | `+71B` | `+0/−0` | yes |
+| **3d** (3 days) | `+7,120` | `+598.8K` | `+13,593/−1,409` | since birth |
+| **1w** (1 week) | `+7,120` | `+598.8K` | `+13,593/−1,409` | since birth |
+| **2w** (2 weeks) | `+7,120` | `+598.8K` | `+13,593/−1,409` | since birth |
+| **1mo** (1 month) | `+7,120` | `+598.8K` | `+13,593/−1,409` | since birth |
+| **2mo** (2 months) | `+7,120` | `+598.8K` | `+13,593/−1,409` | since birth |
+| **6mo** (6 months) | `+7,120` | `+598.8K` | `+13,593/−1,409` | since birth |
+| **1y** (1 year) | `+7,120` | `+598.8K` | `+13,593/−1,409` | since birth |
 
 LOC/size Δ use committed samples in [`docs/metrics/samples.jsonl`](docs/metrics/samples.jsonl). If the repo is younger than a window, Ready shows **since birth** (full history). Git +/− is always from live `git log --shortstat`. Languages are the top 7 from the same sample as the TUI **languages** panel.
 
