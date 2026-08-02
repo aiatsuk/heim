@@ -34,8 +34,8 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 | **code** | 7,120 LOC |
 | **files** | 30 |
 | **size** | 598K |
-| **updated** | 2026-08-01T07:09:39Z UTC |
-| **history** | 15 samples in [`docs/metrics/`](docs/metrics/) |
+| **updated** | 2026-08-02T07:11:25Z UTC |
+| **history** | 16 samples in [`docs/metrics/`](docs/metrics/) |
 
 #### Top 7 languages
 
@@ -55,14 +55,14 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 
 | Window | LOC Δ | Size Δ | Git +/− | Ready |
 |--------|------:|-------:|--------:|:-----:|
-| **1d** (today) | `0` | `+105B` | `+44/−43` | yes |
-| **3d** (3 days) | `0` | `+217B` | `+131/−128` | yes |
-| **1w** (1 week) | `+7,120` | `+598.9K` | `+13,724/−1,537` | since birth |
-| **2w** (2 weeks) | `+7,120` | `+598.9K` | `+13,724/−1,537` | since birth |
-| **1mo** (1 month) | `+7,120` | `+598.9K` | `+13,724/−1,537` | since birth |
-| **2mo** (2 months) | `+7,120` | `+598.9K` | `+13,724/−1,537` | since birth |
-| **6mo** (6 months) | `+7,120` | `+598.9K` | `+13,724/−1,537` | since birth |
-| **1y** (1 year) | `+7,120` | `+598.9K` | `+13,724/−1,537` | since birth |
+| **1d** (today) | `0` | `+81B` | `+0/−0` | yes |
+| **3d** (3 days) | `0` | `+227B` | `+128/−125` | yes |
+| **1w** (1 week) | `+7,120` | `+599.0K` | `+13,764/−1,576` | since birth |
+| **2w** (2 weeks) | `+7,120` | `+599.0K` | `+13,764/−1,576` | since birth |
+| **1mo** (1 month) | `+7,120` | `+599.0K` | `+13,764/−1,576` | since birth |
+| **2mo** (2 months) | `+7,120` | `+599.0K` | `+13,764/−1,576` | since birth |
+| **6mo** (6 months) | `+7,120` | `+599.0K` | `+13,764/−1,576` | since birth |
+| **1y** (1 year) | `+7,120` | `+599.0K` | `+13,764/−1,576` | since birth |
 
 LOC/size Δ use committed samples in [`docs/metrics/samples.jsonl`](docs/metrics/samples.jsonl). If the repo is younger than a window, Ready shows **since birth** (full history). Git +/− is always from live `git log --shortstat`. Languages are the top 7 from the same sample as the TUI **languages** panel.
 
