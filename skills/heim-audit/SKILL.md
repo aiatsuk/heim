@@ -4,6 +4,7 @@ description: >
   Self-audit project growth with heim (LOC/size/git deltas) during AI coding
   sessions. Use after large scaffolds, multi-file edits, or before declaring
   work done — especially when vibe-code bloat is a risk.
+model: inherit
 ---
 
 # heim-audit
