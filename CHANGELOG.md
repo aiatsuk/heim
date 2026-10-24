@@ -61,6 +61,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - History retains only the fields it is read for; whole samples kept up to 100
   commits, churn, `top_dirs` and the language breakdown alive for all 10k entries.
 
+### Changed
+
+- **`heim-audit` skill** frontmatter sets `model: inherit`, so loading it keeps the session's model and effort
+
 ## [0.1.0] — 2026-07-26
 
 ### Added
