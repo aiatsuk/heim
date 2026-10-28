@@ -1,12 +1,12 @@
 {
   "schema": "heim.metrics.v1",
-  "generated_at": "2026-10-27T12:18:07Z",
-  "generated_at_unix": 1793103487,
+  "generated_at": "2026-10-28T13:00:33Z",
+  "generated_at_unix": 1793192433,
   "current": {
-    "ts": 1793103487,
+    "ts": 1793192433,
     "code": 7120,
     "files": 30,
-    "size": 619471,
+    "size": 619548,
     "branch": "main"
   },
   "languages": [
@@ -69,10 +69,10 @@
       "ready": true,
       "rolling": true,
       "code": 0,
-      "size_bytes": 134,
-      "git_insertions": 43,
-      "git_deletions": 42,
-      "baseline_ts": 1792928250
+      "size_bytes": 77,
+      "git_insertions": 0,
+      "git_deletions": 0,
+      "baseline_ts": 1793103487
     },
     {
       "window": "3d",
@@ -81,10 +81,10 @@
       "ready": true,
       "rolling": true,
       "code": 0,
-      "size_bytes": 349,
-      "git_insertions": 95,
-      "git_deletions": 88,
-      "baseline_ts": 1792840032
+      "size_bytes": 211,
+      "git_insertions": 83,
+      "git_deletions": 81,
+      "baseline_ts": 1792928250
     },
     {
       "window": "1w",
@@ -94,9 +94,9 @@
       "rolling": true,
       "code": 0,
       "size_bytes": 639,
-      "git_insertions": 266,
-      "git_deletions": 255,
-      "baseline_ts": 1792496631
+      "git_insertions": 261,
+      "git_deletions": 250,
+      "baseline_ts": 1792583732
     },
     {
       "window": "2w",
@@ -105,10 +105,10 @@
       "ready": true,
       "rolling": true,
       "code": 0,
-      "size_bytes": 1204,
-      "git_insertions": 612,
-      "git_deletions": 593,
-      "baseline_ts": 1791819209
+      "size_bytes": 1137,
+      "git_insertions": 570,
+      "git_deletions": 552,
+      "baseline_ts": 1791979109
     },
     {
       "window": "1mo",
@@ -117,9 +117,9 @@
       "ready": true,
       "rolling": true,
       "code": 0,
-      "size_bytes": 2263,
-      "git_insertions": 1244,
-      "git_deletions": 1210,
+      "size_bytes": 2340,
+      "git_insertions": 1284,
+      "git_deletions": 1249,
       "baseline_ts": 1790510882
     },
     {
@@ -129,10 +129,10 @@
       "ready": true,
       "rolling": true,
       "code": 0,
-      "size_bytes": 4431,
-      "git_insertions": 2572,
-      "git_deletions": 2507,
-      "baseline_ts": 1787852432
+      "size_bytes": 4383,
+      "git_insertions": 2525,
+      "git_deletions": 2461,
+      "baseline_ts": 1788007396
     },
     {
       "window": "6mo",
@@ -141,9 +141,9 @@
       "ready": true,
       "rolling": false,
       "code": 7120,
-      "size_bytes": 619471,
-      "git_insertions": 17441,
-      "git_deletions": 5162,
+      "size_bytes": 619548,
+      "git_insertions": 17481,
+      "git_deletions": 5201,
       "baseline_ts": 1785088800
     },
     {
@@ -153,12 +153,12 @@
       "ready": true,
       "rolling": false,
       "code": 7120,
-      "size_bytes": 619471,
-      "git_insertions": 17441,
-      "git_deletions": 5162,
+      "size_bytes": 619548,
+      "git_insertions": 17481,
+      "git_deletions": 5201,
       "baseline_ts": 1785088800
     }
   ],
-  "samples": 102,
+  "samples": 103,
   "samples_path": "docs/metrics/samples.jsonl"
 }
