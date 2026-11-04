@@ -34,8 +34,8 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 | **code** | 7,120 LOC |
 | **files** | 30 |
 | **size** | 605K |
-| **updated** | 2026-11-03T14:21:42Z UTC |
-| **history** | 109 samples in [`docs/metrics/`](docs/metrics/) |
+| **updated** | 2026-11-04T14:37:54Z UTC |
+| **history** | 110 samples in [`docs/metrics/`](docs/metrics/) |
 
 #### Top 7 languages
 
@@ -55,14 +55,14 @@ Regenerate: <code>python3 scripts/gen_demo_gif.py</code> · live capture: <a hre
 
 | Window | LOC Δ | Size Δ | Git +/− | Ready |
 |--------|------:|-------:|--------:|:-----:|
-| **1d** (today) | `0` | `+132B` | `+44/−43` | yes |
-| **3d** (3 days) | `0` | `+207B` | `+90/−88` | yes |
-| **1w** (1 week) | `0` | `+497B` | `+260/−254` | yes |
-| **2w** (2 weeks) | `0` | `+1.1K` | `+566/−548` | yes |
-| **1mo** (1 month) | `0` | `+2.2K` | `+1,243/−1,209` | yes |
+| **1d** (today) | `0` | `+77B` | `+0/−0` | yes |
+| **3d** (3 days) | `0` | `+209B` | `+87/−85` | yes |
+| **1w** (1 week) | `0` | `+497B` | `+258/−252` | yes |
+| **2w** (2 weeks) | `0` | `+1.1K` | `+564/−546` | yes |
+| **1mo** (1 month) | `0` | `+2.3K` | `+1,286/−1,251` | yes |
 | **2mo** (2 months) | `0` | `+4.3K` | `+2,527/−2,463` | yes |
-| **6mo** (6 months) | `+7,120` | `+605.4K` | `+17,741/−5,455` | since birth |
-| **1y** (1 year) | `+7,120` | `+605.4K` | `+17,741/−5,455` | since birth |
+| **6mo** (6 months) | `+7,120` | `+605.5K` | `+17,784/−5,497` | since birth |
+| **1y** (1 year) | `+7,120` | `+605.5K` | `+17,784/−5,497` | since birth |
 
 LOC/size Δ use committed samples in [`docs/metrics/samples.jsonl`](docs/metrics/samples.jsonl). If the repo is younger than a window, Ready shows **since birth** (full history). Git +/− is always from live `git log --shortstat`. Languages are the top 7 from the same sample as the TUI **languages** panel.
 
